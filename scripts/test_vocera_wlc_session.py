@@ -107,6 +107,59 @@ def test_long_session_package() -> None:
         require(events[-1]["event_kind"] == "missed", f"bad event marker: {events}")
 
 
+def test_incoming_staging_dir() -> None:
+    """The session package stages SCP uploads in incoming/, not pcaps/.
+
+    Exporting straight into pcaps/ would let a half-written file look like final
+    evidence, so the WLC writes the EPC into incoming/ and the collector only
+    promotes it into pcaps/ once the upload is complete and validated.
+    """
+
+    with tempfile.TemporaryDirectory() as tmp:
+        rc = session.main(
+            [
+                "init",
+                "--session-root",
+                tmp,
+                "--study-id",
+                "study_x",
+                "--session-id",
+                "sess_incoming",
+                "--wlc-name",
+                "SRHC-WLC-40G-SEC",
+                "--wlc-interface",
+                "Port-channel1",
+                "--collector-host",
+                "10.0.128.107",
+                "--collector-scp-username",
+                "appsadmin",
+                "--sender-mac",
+                "00:09:ef:54:5f:46",
+                "--sender-ip",
+                "10.16.88.228",
+                "--receiver-mac",
+                "00:09:ef:61:0b:f7",
+                "--receiver-ip",
+                "10.16.88.230",
+            ]
+        )
+        require(rc == 0, "session init should succeed")
+        target = Path(tmp) / "study_x" / "sess_incoming"
+        require((target / "incoming").is_dir(), "session package must create an incoming/ staging dir")
+        require((target / "pcaps").is_dir(), "session package must still create pcaps/")
+        export_path = session.default_export_path("sess_incoming", target)
+        require(
+            export_path.endswith("/incoming/sess_incoming.pcap"),
+            f"export should land in incoming/: {export_path}",
+        )
+        payload = json.loads((target / "session.json").read_text(encoding="utf-8"))
+        require("/incoming/" in payload["collector_scp_path"], f"scp path should target incoming/: {payload['collector_scp_path']}")
+        require("/incoming/" in payload["export_uri"], f"export URI should target incoming/: {payload['export_uri']}")
+        require("/pcaps/" not in payload["export_uri"], "export URI must not target pcaps/ directly")
+        stop_cli = (target / "stop-export.cli").read_text(encoding="utf-8")
+        require("/incoming/" in stop_cli, "stop-export should export the EPC into incoming/")
+
+
 def test_operator_vlan_override_package() -> None:
     """Verify operator-selected configured VLAN is persisted without changing the default contract."""
 
@@ -316,6 +369,7 @@ def test_resolve_group_persists_and_enforces_vlan() -> None:
 
 def main() -> int:
     test_long_session_package()
+    test_incoming_staging_dir()
     test_operator_vlan_override_package()
     test_generated_capture_name_is_unique()
     test_duplicate_session_protection()

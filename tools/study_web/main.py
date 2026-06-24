@@ -47,6 +47,16 @@ from vocera_rf_validation.study_web import (  # legacy SQL helpers reused intent
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# vocera_media_qoe ships its tools as top-level modules (the parser runs as
+# ``python3 -m vocera_media_qoe_batch`` with PYTHONPATH set to that directory).
+# Put that directory on sys.path so the WLC session-EPC ingest path can reuse
+# the exact same validated, unit-tested file primitives the collector relies on.
+_VOCERA_MEDIA_QOE_DIR = ROOT / "tools" / "vocera_media_qoe"
+if str(_VOCERA_MEDIA_QOE_DIR) not in sys.path:
+    sys.path.insert(0, str(_VOCERA_MEDIA_QOE_DIR))
+import vocera_wlc_session_ingest as wlc_ingest  # noqa: E402
+
 STATIC_DIR = Path(os.environ.get("STUDY_WEB_STATIC_DIR", str(ROOT / "tools" / "study_web" / "static")))
 SOURCE_TYPES = ("badge_log", "ekahau_json", "manual_csv", "ipad_client_detail", "other")
 RUN_STATUSES = ("draft", "running", "complete", "failed", "deleted")
@@ -289,6 +299,10 @@ class MediaCaptureRegister(BaseModel):
 class MediaCaptureExecute(BaseModel):
     reparse: bool = False
     timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
+
+
+class MediaWlcSessionIngestScan(BaseModel):
+    session_id: str | None = None
 
 
 class MediaDnacCaptureQuery(BaseModel):
@@ -2853,6 +2867,12 @@ def validate_media_raw_file(source_path: str) -> Path:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Capture path must stay under STUDY_WEB_MEDIA_QOE_RAW_DIR.") from exc
 
+    if media_path_under_wlc_sessions(resolved):
+        raise HTTPException(
+            status_code=400,
+            detail="WLC capture-session files are ingested by the session pipeline, not the generic raw-file path.",
+        )
+
     if not resolved.is_file():
         raise HTTPException(status_code=400, detail="Capture path must be a regular file.")
     return resolved
@@ -3101,6 +3121,26 @@ def media_wlc_session_root(*, create: bool = False) -> Path:
     if create:
         resolved.mkdir(parents=True, exist_ok=True)
     return resolved
+
+
+def media_path_under_wlc_sessions(path: Path) -> bool:
+    """Return True when ``path`` resolves inside the WLC capture-session root.
+
+    WLC session packages are owned by the session-aware ingest pipeline, never by
+    the generic raw-file register/scan endpoints, so the two evidence pipelines
+    cannot cross-contaminate: a half-uploaded session EPC must not be parsed by a
+    generic operator action, and a session EPC must not be double-registered.
+    """
+
+    try:
+        root = media_wlc_session_root()
+    except HTTPException:
+        return False
+    try:
+        path.resolve(strict=False).relative_to(root)
+        return True
+    except (ValueError, OSError):
+        return False
 
 
 def media_wlc_validate_id(value: str, label: str) -> str:
@@ -4058,6 +4098,9 @@ def media_scan_raw_files(study_id: str, *, include_registered: bool, limit: int)
             try:
                 resolved = candidate.resolve(strict=True)
                 resolved.relative_to(root)
+                if media_path_under_wlc_sessions(resolved):
+                    # WLC session packages are owned by the session ingest path.
+                    continue
                 if not resolved.is_file():
                     continue
                 state = media_source_state(resolved)
@@ -4660,10 +4703,24 @@ def set_media_qoe_wlc_attempt_active_group(attempt_id: str, payload: MediaWlcAtt
     return {"ok": True, "attempt": attempt}
 
 
-@app.post("/api/studies/{study_id}/media-qoe/captures/register")
-def register_study_media_qoe_capture(study_id: str, payload: MediaCaptureRegister) -> dict[str, Any]:
-    validate_media_study_id(study_id)
-    path = validate_media_raw_file(payload.source_path)
+def media_register_capture_record(
+    study_id: str,
+    path: Path,
+    *,
+    capture_point: str | None,
+    source_name: str | None,
+    notes: str | None,
+    site: str | None = None,
+) -> dict[str, Any]:
+    """Register (or return the existing) capture row for a validated file.
+
+    Shared by the generic raw-file register endpoint and the WLC session-EPC
+    ingest path. The caller validates ``path`` first with the appropriate
+    validator (generic raw-file vs. session-package), so this only owns file
+    identity, de-duplication, and the insert -- both ingestion paths register
+    captures identically.
+    """
+
     state = media_source_state(path)
     capture_id = media_capture_id_for_state(state)
     source_sha256 = media_source_sha256_for_state(state)
@@ -4680,17 +4737,17 @@ def register_study_media_qoe_capture(study_id: str, payload: MediaCaptureRegiste
             raise HTTPException(status_code=409, detail="Capture source is already registered to another study.")
         if row.get("capture_id") != capture_id:
             raise HTTPException(status_code=409, detail="Capture source path is already registered with a different file identity.")
-        return {"ok": True, "capture": media_study_capture_row(capture_id), "registered": False}
+        return {"capture_id": capture_id, "registered": False}
 
     raw_metadata = {
         "source_pcap": {
             "path": state["path"],
-            "name": payload.source_name or state["name"],
+            "name": source_name or state["name"],
             "size_bytes": state["size_bytes"],
             "mtime_ns": state["mtime_ns"],
         },
         "registration": {
-            "notes": payload.notes,
+            "notes": notes,
             "registered_by": user(),
         },
     }
@@ -4703,15 +4760,15 @@ def register_study_media_qoe_capture(study_id: str, payload: MediaCaptureRegiste
         f"{sql_text(capture_id)}, "
         f"{sql_text(study_id)}, "
         f"{sql_text(state['path'])}, "
-        f"{sql_text(payload.source_name or state['name'])}, "
+        f"{sql_text(source_name or state['name'])}, "
         f"{sql_int(int(state['size_bytes']))}, "
         f"{sql_text(source_sha256)}, "
         f"{sql_timestamp(state['mtime'])}, "
         f"{sql_int(int(state['mtime_ns']))}, "
         "now(), "
         "now(), "
-        f"{sql_text(payload.site or 'unknown')}, "
-        f"{sql_text(payload.capture_point or 'unknown')}, "
+        f"{sql_text(site or 'unknown')}, "
+        f"{sql_text(capture_point or 'unknown')}, "
         "'registered', "
         "false, "
         f"{sql_text(user())}, "
@@ -4720,7 +4777,22 @@ def register_study_media_qoe_capture(study_id: str, payload: MediaCaptureRegiste
         ") "
         "returning capture_id;"
     )
-    return {"ok": True, "capture": media_study_capture_row(capture_id), "registered": True}
+    return {"capture_id": capture_id, "registered": True}
+
+
+@app.post("/api/studies/{study_id}/media-qoe/captures/register")
+def register_study_media_qoe_capture(study_id: str, payload: MediaCaptureRegister) -> dict[str, Any]:
+    validate_media_study_id(study_id)
+    path = validate_media_raw_file(payload.source_path)
+    result = media_register_capture_record(
+        study_id,
+        path,
+        capture_point=payload.capture_point,
+        source_name=payload.source_name,
+        notes=payload.notes,
+        site=payload.site,
+    )
+    return {"ok": True, "capture": media_study_capture_row(result["capture_id"]), "registered": result["registered"]}
 
 
 @app.get("/api/media-qoe/captures/{capture_id}/parse-runs")
@@ -4749,6 +4821,33 @@ def execute_media_qoe_capture(capture_id: str, payload: MediaCaptureExecute) -> 
         raise HTTPException(status_code=409, detail="Capture is already complete. Set reparse=true to parse it again.")
 
     path = validate_media_raw_file(capture.get("source_path") or "")
+    return media_run_capture_parse(
+        capture_id,
+        study_id,
+        path,
+        timeout_seconds=payload.timeout_seconds,
+        requested_by=user(),
+    )
+
+
+def media_run_capture_parse(
+    capture_id: str,
+    study_id: str,
+    path: Path,
+    *,
+    timeout_seconds: int | None = None,
+    requested_by: str | None = None,
+) -> dict[str, Any]:
+    """Run the media QoE parser for one already-validated capture file.
+
+    Shared executor for the generic single-capture execute endpoint and the WLC
+    session-EPC ingest path: locking, parse-run bookkeeping, the
+    ``vocera_media_qoe_batch`` subprocess, and result recording all live here so
+    both paths behave identically. The caller validates ``path`` with the
+    appropriate validator (generic raw-file vs. session-package) and registers
+    ``capture_id`` first.
+    """
+
     state = media_source_state(path)
     current_capture_id = media_capture_id_for_state(state)
     if current_capture_id != capture_id:
@@ -4761,10 +4860,10 @@ def execute_media_qoe_capture(capture_id: str, payload: MediaCaptureExecute) -> 
         raise HTTPException(status_code=500, detail=f"Media QoE parser config file not found: {config_path}")
 
     parse_run_id = new_entity_id("parse")
-    timeout_seconds = min(payload.timeout_seconds or media_parse_timeout_seconds(), media_parse_timeout_seconds())
-    requested_by = user()
+    effective_timeout = min(timeout_seconds or media_parse_timeout_seconds(), media_parse_timeout_seconds())
+    requested_by = requested_by or user()
     lock_acquired = False
-    media_acquire_parse_lock(capture_id, parse_run_id, timeout_seconds)
+    media_acquire_parse_lock(capture_id, parse_run_id, effective_timeout)
     lock_acquired = True
 
     try:
@@ -4857,7 +4956,7 @@ def execute_media_qoe_capture(capture_id: str, payload: MediaCaptureExecute) -> 
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=timeout_seconds,
+                timeout=effective_timeout,
                 check=False,
             )
             stdout = completed.stdout
@@ -4869,7 +4968,7 @@ def execute_media_qoe_capture(capture_id: str, payload: MediaCaptureExecute) -> 
             stdout = media_truncate_output(exc.stdout)
             stderr = media_truncate_output(exc.stderr)
             exit_code = -1
-            error = f"Parser timed out after {timeout_seconds} seconds."
+            error = f"Parser timed out after {effective_timeout} seconds."
         except Exception as exc:  # noqa: BLE001 - persist concise parser execution failures for the UI
             exit_code = -1
             error = str(exc)
@@ -4927,6 +5026,361 @@ def execute_media_qoe_capture(capture_id: str, payload: MediaCaptureExecute) -> 
     finally:
         if lock_acquired:
             media_release_parse_lock(parse_run_id)
+
+
+# ---------------------------------------------------------------------------
+# WLC capture-session EPC ingest (Phase 0: SCP session-artifact foundation)
+# ---------------------------------------------------------------------------
+# Study Web owns this pipeline so it can reuse the in-process parser executor
+# (media_run_capture_parse) and capture registration the generic path uses.
+# A thin systemd timer pokes POST /api/media-qoe/wlc/sessions/ingest-scan once a
+# minute; the heavy file primitives live in vocera_wlc_session_ingest (wlc_ingest)
+# and are unit tested without a database.
+
+
+def _media_parse_iso(value: str | None) -> "datetime | None":
+    if not value:
+        return None
+    text = str(value).strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def media_wlc_ingest_stability_seconds() -> int:
+    """Minimum unchanged interval before an incoming upload is treated as final."""
+
+    raw = os.environ.get("STUDY_WEB_MEDIA_QOE_WLC_INGEST_STABILITY_SECONDS", "15").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 15
+
+
+def media_wlc_validate_session_capture(path_text: str, *, subdir: str) -> Path:
+    """Validate a file inside a WLC session package's incoming/ or pcaps/ dir.
+
+    The session-aware counterpart to validate_media_raw_file: it *requires* the
+    path to live under the WLC session root (which the generic validator now
+    rejects), at the four-part <root>/<study>/<session>/<subdir>/<file> depth.
+    """
+
+    if "\x00" in path_text:
+        raise HTTPException(status_code=400, detail="Source path contains an invalid null byte.")
+    if media_path_has_traversal(path_text):
+        raise HTTPException(status_code=400, detail="Source path traversal is not allowed.")
+    root = media_wlc_session_root()
+    candidate = Path(path_text).expanduser()
+    candidate = candidate if candidate.is_absolute() else root / candidate
+    try:
+        resolved = candidate.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Session capture file was not found: {path_text}") from exc
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Session capture file is not accessible: {exc}") from exc
+    info = wlc_ingest.parse_session_rel(root, resolved)
+    if info is None or info.get("subdir") != subdir:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Session capture must live under <study>/<session>/{subdir}/ in the WLC session root.",
+        )
+    if resolved.suffix.lower() not in media_allowed_extensions():
+        raise HTTPException(status_code=400, detail=f"Unsupported capture extension: {resolved.suffix or '<none>'}.")
+    if not resolved.is_file():
+        raise HTTPException(status_code=400, detail="Session capture path must be a regular file.")
+    return resolved
+
+
+def media_wlc_session_artifact_row(artifact_id: str) -> dict[str, str] | None:
+    rows = media_query_rows(
+        "select * from vocera_media_session_artifacts "
+        f"where artifact_id = {sql_text(artifact_id)};"
+    )
+    return rows[0] if rows else None
+
+
+def media_wlc_upsert_artifact(
+    artifact_id: str,
+    capture_session_id: str,
+    artifact_kind: str,
+    source_path: str,
+    source_name: str,
+    *,
+    ingest_state: str,
+    final_path: str | None = None,
+    sha256: str | None = None,
+    size_bytes: int | None = None,
+    validated_at: bool = False,
+    capture_id: str | None = None,
+    parser_status: str | None = None,
+    visibility_class: str | None = None,
+    error_message: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Insert or update one session-artifact row, accumulating metadata."""
+
+    media_query_one(
+        "insert into vocera_media_session_artifacts ("
+        "artifact_id, capture_session_id, artifact_kind, source_path, final_path, source_name, "
+        "sha256, size_bytes, validated_at, ingest_state, capture_id, parser_status, "
+        "visibility_class, error_message, metadata, updated_at"
+        ") values ("
+        f"{sql_text(artifact_id)}, {sql_text(capture_session_id)}, {sql_text(artifact_kind)}, "
+        f"{sql_text(source_path)}, {sql_text(final_path)}, {sql_text(source_name)}, "
+        f"{sql_text(sha256)}, {sql_int(size_bytes)}, "
+        f"{'now()' if validated_at else 'null'}, {sql_text(ingest_state)}, {sql_text(capture_id)}, "
+        f"{sql_text(parser_status)}, {sql_text(visibility_class)}, {sql_text(error_message)}, "
+        f"{media_jsonb(metadata or {})}, now()"
+        ") on conflict (artifact_id) do update set "
+        "capture_session_id = excluded.capture_session_id, "
+        "artifact_kind = excluded.artifact_kind, "
+        "source_path = excluded.source_path, "
+        "final_path = coalesce(excluded.final_path, vocera_media_session_artifacts.final_path), "
+        "source_name = excluded.source_name, "
+        "sha256 = coalesce(excluded.sha256, vocera_media_session_artifacts.sha256), "
+        "size_bytes = coalesce(excluded.size_bytes, vocera_media_session_artifacts.size_bytes), "
+        "validated_at = coalesce(excluded.validated_at, vocera_media_session_artifacts.validated_at), "
+        "ingest_state = excluded.ingest_state, "
+        "capture_id = coalesce(excluded.capture_id, vocera_media_session_artifacts.capture_id), "
+        "parser_status = coalesce(excluded.parser_status, vocera_media_session_artifacts.parser_status), "
+        "visibility_class = coalesce(excluded.visibility_class, vocera_media_session_artifacts.visibility_class), "
+        "error_message = excluded.error_message, "
+        "metadata = vocera_media_session_artifacts.metadata || excluded.metadata, "
+        "updated_at = now();"
+    )
+
+
+def _media_wlc_prev_observation(row: dict[str, str] | None) -> tuple[dict[str, int] | None, "datetime | None"]:
+    if not row:
+        return None, None
+    raw_meta = row.get("metadata")
+    meta: Any = {}
+    if isinstance(raw_meta, str):
+        try:
+            meta = json.loads(raw_meta)
+        except json.JSONDecodeError:
+            meta = {}
+    elif isinstance(raw_meta, dict):
+        meta = raw_meta
+    observed = meta.get("observed") if isinstance(meta, dict) else None
+    if not isinstance(observed, dict):
+        return None, None
+    signature = observed.get("signature")
+    prev_sig: dict[str, int] | None = None
+    if isinstance(signature, dict) and "size_bytes" in signature and "mtime_ns" in signature:
+        try:
+            prev_sig = {"size_bytes": int(signature["size_bytes"]), "mtime_ns": int(signature["mtime_ns"])}
+        except (TypeError, ValueError):
+            prev_sig = None
+    return prev_sig, _media_parse_iso(observed.get("observed_at"))
+
+
+def media_wlc_process_incoming(
+    *,
+    study_id: str,
+    session_id: str,
+    incoming_pcap: Path,
+    session_root: Path,
+    stability_seconds: int,
+) -> dict[str, Any]:
+    """Detect, validate, promote, register, and parse one incoming EPC.
+
+    Idempotent and timer-driven: an upload still in flight is recorded as
+    ``upload_detected`` and revisited on the next scan; only a file unchanged for
+    ``stability_seconds`` is hashed, atomically promoted into ``pcaps/``,
+    registered as a ``wlc_epc`` capture, and parsed by the shared executor.
+    """
+
+    name = incoming_pcap.name
+    artifact_id = wlc_ingest.artifact_id_for(session_id, "wlc_epc", name)
+    base = (artifact_id, session_id, "wlc_epc", str(incoming_pcap), name)
+    now = wlc_ingest.utc_now()
+
+    existing = media_wlc_session_artifact_row(artifact_id)
+    if existing and existing.get("ingest_state") in {"imported", "parsing", "parsed"}:
+        return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
+                "state": existing.get("ingest_state"), "detail": "already ingested"}
+
+    try:
+        current_sig = wlc_ingest.file_signature(incoming_pcap)
+    except OSError as exc:
+        return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
+                "state": "error", "detail": str(exc)}
+
+    prev_sig, prev_observed_at = _media_wlc_prev_observation(existing)
+    decision = wlc_ingest.plan_ingest_decision(
+        prev_signature=prev_sig,
+        prev_observed_at=prev_observed_at,
+        current_signature=current_sig,
+        now=now,
+        min_gap_seconds=stability_seconds,
+    )
+
+    if decision in {wlc_ingest.DECISION_WAIT_NEW, wlc_ingest.DECISION_WAIT_CHANGED}:
+        media_wlc_upsert_artifact(
+            *base, ingest_state="upload_detected", size_bytes=current_sig["size_bytes"],
+            metadata={"observed": {"signature": current_sig, "observed_at": now.isoformat()}},
+        )
+        return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
+                "state": "upload_detected", "decision": decision}
+    if decision == wlc_ingest.DECISION_WAIT_TOO_SOON:
+        # Keep the original observed_at so the stable interval keeps growing.
+        media_wlc_upsert_artifact(*base, ingest_state="upload_detected", size_bytes=current_sig["size_bytes"])
+        return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
+                "state": "upload_detected", "decision": decision}
+
+    # decision == ready: validate container, hash, promote, register, parse.
+    media_wlc_upsert_artifact(*base, ingest_state="validating", size_bytes=current_sig["size_bytes"])
+    if not wlc_ingest.looks_like_pcap(incoming_pcap):
+        media_wlc_upsert_artifact(
+            *base, ingest_state="quarantined",
+            error_message="File is not a pcap or pcapng capture container.",
+        )
+        return {"artifact_id": artifact_id, "session_id": session_id, "name": name, "state": "quarantined"}
+
+    sha = wlc_ingest.sha256_file(incoming_pcap)
+    dup = media_query_rows(
+        "select artifact_id, capture_id from vocera_media_session_artifacts "
+        f"where capture_session_id = {sql_text(session_id)} and sha256 = {sql_text(sha)} "
+        f"and artifact_id <> {sql_text(artifact_id)} and ingest_state in ('imported', 'parsing', 'parsed') "
+        "limit 1;"
+    )
+    if dup:
+        media_wlc_upsert_artifact(
+            *base, ingest_state="parsed", sha256=sha, capture_id=dup[0].get("capture_id"),
+            parser_status="duplicate", validated_at=True,
+            metadata={"duplicate_of": dup[0].get("artifact_id")},
+        )
+        return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
+                "state": "parsed", "detail": "duplicate content"}
+
+    final = wlc_ingest.promoted_path(session_root, incoming_pcap)
+    if final is None:
+        media_wlc_upsert_artifact(*base, ingest_state="failed", sha256=sha,
+                                  error_message="Could not resolve the pcaps/ destination for this upload.")
+        return {"artifact_id": artifact_id, "session_id": session_id, "name": name, "state": "failed"}
+    try:
+        wlc_ingest.atomic_move(incoming_pcap, final)
+    except OSError as exc:
+        media_wlc_upsert_artifact(*base, ingest_state="failed", sha256=sha,
+                                  error_message=f"Atomic promotion into pcaps/ failed: {exc}")
+        return {"artifact_id": artifact_id, "session_id": session_id, "name": name, "state": "failed"}
+
+    media_wlc_upsert_artifact(
+        *base, ingest_state="imported", final_path=str(final), sha256=sha,
+        size_bytes=current_sig["size_bytes"], validated_at=True,
+    )
+
+    try:
+        validated = media_wlc_validate_session_capture(str(final), subdir=wlc_ingest.PCAPS_SUBDIR)
+        registration = media_register_capture_record(
+            study_id, validated, capture_point="wlc_epc",
+            source_name=name, notes="WLC capture-session EPC auto-ingest.",
+        )
+    except HTTPException as exc:
+        media_wlc_upsert_artifact(*base, ingest_state="failed", final_path=str(final),
+                                  error_message=str(exc.detail))
+        return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
+                "state": "failed", "detail": str(exc.detail)}
+    capture_id = registration["capture_id"]
+
+    if not media_execution_enabled():
+        media_wlc_upsert_artifact(
+            *base, ingest_state="imported", final_path=str(final), capture_id=capture_id,
+            parser_status="execution_disabled",
+        )
+        return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
+                "state": "imported", "capture_id": capture_id, "detail": "parser execution disabled"}
+
+    media_wlc_upsert_artifact(*base, ingest_state="parsing", final_path=str(final), capture_id=capture_id)
+    try:
+        parse = media_run_capture_parse(capture_id, study_id, validated, requested_by="wlc-session-ingest")
+    except HTTPException as exc:
+        media_wlc_upsert_artifact(*base, ingest_state="failed", capture_id=capture_id,
+                                  parser_status="failed", error_message=str(exc.detail))
+        return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
+                "state": "failed", "capture_id": capture_id, "detail": str(exc.detail)}
+
+    status = parse.get("status")
+    final_state = "parsed" if status == "complete" else "failed"
+    media_wlc_upsert_artifact(
+        *base, ingest_state=final_state, capture_id=capture_id, parser_status=status,
+        error_message=parse.get("error"),
+        metadata={"parse_run_id": parse.get("parse_run_id"), "summary": parse.get("summary")},
+    )
+    return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
+            "state": final_state, "capture_id": capture_id, "parse_run_id": parse.get("parse_run_id")}
+
+
+def media_wlc_ingest_scan(*, session_id: str | None = None) -> dict[str, Any]:
+    """Scan every session package's incoming/ once and ingest stable EPCs."""
+
+    root = media_wlc_session_root()
+    stability_seconds = media_wlc_ingest_stability_seconds()
+    results: list[dict[str, Any]] = []
+    sessions_seen: dict[str, dict[str, str] | None] = {}
+    for incoming_pcap in wlc_ingest.iter_incoming_pcaps(root, allowed_extensions=media_allowed_extensions()):
+        info = wlc_ingest.parse_session_rel(root, incoming_pcap)
+        if info is None:
+            continue
+        sess_id = info["session_id"]
+        if session_id and sess_id != session_id:
+            continue
+        try:
+            media_wlc_validate_id(sess_id, "session_id")
+        except HTTPException:
+            results.append({"session_id": sess_id, "name": info["name"], "state": "skipped",
+                            "detail": "invalid session id"})
+            continue
+        if sess_id not in sessions_seen:
+            rows = media_query_rows(
+                "select session_id, study_id from v_vocera_media_capture_sessions "
+                f"where session_id = {sql_text(sess_id)};"
+            )
+            sessions_seen[sess_id] = rows[0] if rows else None
+        session_row = sessions_seen[sess_id]
+        if session_row is None:
+            # The artifact foreign key requires a known capture session.
+            results.append({"session_id": sess_id, "name": info["name"], "state": "skipped",
+                            "detail": "unknown capture session"})
+            continue
+        resolved_study = session_row.get("study_id") or info["study_id"]
+        try:
+            outcome = media_wlc_process_incoming(
+                study_id=resolved_study, session_id=sess_id, incoming_pcap=incoming_pcap,
+                session_root=root, stability_seconds=stability_seconds,
+            )
+        except HTTPException as exc:
+            outcome = {"session_id": sess_id, "name": info["name"], "state": "error",
+                       "detail": str(exc.detail)}
+        results.append(outcome)
+    return {"ok": True, "scanned": len(results), "stability_seconds": stability_seconds, "results": results}
+
+
+@app.post("/api/media-qoe/wlc/sessions/ingest-scan")
+def media_qoe_wlc_session_ingest_scan(payload: MediaWlcSessionIngestScan | None = None) -> dict[str, Any]:
+    session_id = payload.session_id if payload else None
+    if session_id:
+        media_wlc_validate_id(session_id, "session_id")
+    return media_wlc_ingest_scan(session_id=session_id)
+
+
+@app.get("/api/media-qoe/wlc/sessions/{session_id}/artifacts")
+def list_media_qoe_wlc_session_artifacts(session_id: str) -> dict[str, Any]:
+    media_wlc_validate_id(session_id, "session_id")
+    media_wlc_session_row(session_id)
+    rows = media_query_rows(
+        "select * from vocera_media_session_artifacts "
+        f"where capture_session_id = {sql_text(session_id)} "
+        "order by received_at desc, artifact_id;"
+    )
+    return {"ok": True, "artifacts": rows}
 
 
 @app.patch("/api/media-qoe/streams/{capture_id}/{stream_id}")
