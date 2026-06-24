@@ -1,0 +1,68 @@
+# Default local config for Vocera badge-side RF validation. Keep site-specific
+# changes in an untracked override if needed.
+
+timezone: America/Chicago
+
+default_match_window_seconds: 1
+require_same_measurement_date: true
+
+minimum_samples_for_outlier_stats: 30
+outlier_z_score_threshold: 2.0
+
+rssi_offsets:
+  default_source: "Stryker Vocera WLAN Requirements and Best Practices, Ekahau Sidekick offsets"
+  by_band:
+    "2.4GHz": -5
+    "5GHz": -8
+    "6GHz": null
+
+badge_radio_signal:
+  # Radio signal info is associated-link telemetry. Attach it only to the
+  # associated/selected AP candidate and calculate noise floor as RSSI - SNR.
+  associated_sample_match_window_seconds: 300
+
+ekahau_json:
+  timestamp_keys:
+    - timestamp
+    - time
+    - measuredAt
+    - measurementTime
+    - surveyTime
+    - collectionTime
+    - createdAt
+  id_keys:
+    - id
+    - uuid
+    - guid
+    - measurementId
+    - surveyPointId
+  floor_keys:
+    - floor
+    - floorName
+    - mapName
+    - level
+  area_keys:
+    - area
+    - zone
+    - room
+  x_keys:
+    - x
+    - x_m
+    - positionX
+  y_keys:
+    - y
+    - y_m
+    - positionY
+
+normalization:
+  mac_format: colon_lower
+  require_same_bssid: true
+  prefer_same_channel: true
+  allow_band_match_if_channel_missing: true
+
+manual_entry:
+  required_fields:
+    - ekahau_rssi_dbm
+  optional_fields:
+    - ekahau_snr_db
+    - notes

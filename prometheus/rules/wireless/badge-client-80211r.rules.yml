@@ -1,0 +1,381 @@
+# Recording rules that normalize Cisco wireless client MDT into dashboard-ready
+# Vocera badge metrics. These are client/RUN-state metrics and must not be
+# treated as AP-to-client voice access-category latency.
+groups:
+  - name: badge-client-80211r
+    interval: 30s
+    rules:
+      # Canonical identity series for Vocera clients on the voice SSID. Later
+      # rules join through this zero-valued metadata carrier to get stable
+      # dashboard labels from noisy Cisco MDT label names.
+      - record: wireless_badge_client_mdt_identity
+        expr: |
+          max by (source, client_mac, wlc, ssid, site_tag, band, device_group, badge_model) (
+            0 *
+            label_replace(
+              label_replace(
+                label_replace(
+                  label_replace(
+                    label_replace(
+                      label_replace(
+                        label_replace(
+                          Cisco_IOS_XE_wireless_client_oper:client_oper_data_dot11_oper_data_dot11k_rm_beacon_meas_req_parameters_current_ssid{vap_ssid="srhcvoice1"},
+                          "client_mac", "$1", "ms_mac_address", "(.+)"
+                        ),
+                        "wlc", "$1", "source", "(.+)"
+                      ),
+                      "ssid", "$1", "vap_ssid", "(.+)"
+                    ),
+                    "site_tag", "srhcvoice1", "vap_ssid", "(.+)"
+                  ),
+                  "band", "all", "vap_ssid", "(.+)"
+                ),
+                "device_group", "VOCERA", "vap_ssid", "(.+)"
+              ),
+              "badge_model", "unknown", "vap_ssid", "(.+)"
+            )
+            + 1
+          )
+
+      - record: wireless_badge_client_present
+        expr: |
+          wireless_badge_client_mdt_identity
+
+      # FT state is derived from the wireless auth key-management string and is
+      # later joined back into the current AP series for FT adoption panels.
+      - record: wireless_badge_client_ft_state
+        expr: |
+          max by (wlc, ssid, site_tag, band, device_group, badge_model, client_mac, ft_state) (
+            0 *
+            label_replace(
+              label_replace(
+                label_replace(
+                  label_replace(
+                    label_replace(
+                      label_replace(
+                        label_replace(
+                          label_replace(
+                            Cisco_IOS_XE_wireless_client_oper:client_oper_data_dot11_oper_data_dot11k_rm_beacon_meas_req_parameters_current_ssid{vap_ssid="srhcvoice1", ms_wifi_auth_key_mgmt=~".*ft.*"},
+                            "client_mac", "$1", "ms_mac_address", "(.+)"
+                          ),
+                          "wlc", "$1", "source", "(.+)"
+                        ),
+                        "ssid", "$1", "vap_ssid", "(.+)"
+                      ),
+                      "site_tag", "srhcvoice1", "vap_ssid", "(.+)"
+                    ),
+                    "band", "all", "vap_ssid", "(.+)"
+                  ),
+                  "device_group", "VOCERA", "vap_ssid", "(.+)"
+                ),
+                "badge_model", "unknown", "vap_ssid", "(.+)"
+              ),
+              "ft_state", "ft", "ms_wifi_auth_key_mgmt", "(.+)"
+            )
+            + 1
+          )
+          or
+          max by (wlc, ssid, site_tag, band, device_group, badge_model, client_mac, ft_state) (
+            0 *
+            label_replace(
+              label_replace(
+                label_replace(
+                  label_replace(
+                    label_replace(
+                      label_replace(
+                        label_replace(
+                          label_replace(
+                            Cisco_IOS_XE_wireless_client_oper:client_oper_data_dot11_oper_data_dot11k_rm_beacon_meas_req_parameters_current_ssid{vap_ssid="srhcvoice1", ms_wifi_auth_key_mgmt!~".*ft.*"},
+                            "client_mac", "$1", "ms_mac_address", "(.+)"
+                          ),
+                          "wlc", "$1", "source", "(.+)"
+                        ),
+                        "ssid", "$1", "vap_ssid", "(.+)"
+                      ),
+                      "site_tag", "srhcvoice1", "vap_ssid", "(.+)"
+                    ),
+                    "band", "all", "vap_ssid", "(.+)"
+                  ),
+                  "device_group", "VOCERA", "vap_ssid", "(.+)"
+                ),
+                "badge_model", "unknown", "vap_ssid", "(.+)"
+              ),
+              "ft_state", "non_ft", "ms_wifi_auth_key_mgmt", "(.+)"
+            )
+            + 1
+          )
+
+      # Current AP information joins MDT identity, the client AP slot metric,
+      # and FT state. The _cc inputs are compatibility copies used by dashboards
+      # and should stay label-compatible with this output.
+      - record: wireless_badge_client_current_ap_info
+        expr: |
+          max by (wlc, ssid, site_tag, band, device_group, badge_model, client_mac, ap_name, ft_state) (
+            (
+              wireless_badge_client_mdt_identity
+              * on (source, client_mac) group_left (ap_name)
+                topk by (source, client_mac) (
+                  1,
+                  max by (source, client_mac, ap_name) (
+                    Cisco_IOS_XE_wireless_client_oper:client_oper_data_common_oper_data_ms_ap_slot_id{co_state="client-status-run"}
+                  )
+                )
+            )
+            * on (wlc, ssid, site_tag, band, device_group, badge_model, client_mac) group_left (ft_state)
+              wireless_badge_client_ft_state
+          )
+
+      # Client-side RF quality indicators come from MDT traffic stats, enriched
+      # with the canonical Vocera labels from wireless_badge_client_mdt_identity.
+      - record: wireless_badge_client_rssi_dbm
+        expr: |
+          max by (wlc, ssid, site_tag, band, device_group, badge_model, client_mac) (
+            label_replace(
+              Cisco_IOS_XE_wireless_client_oper:client_oper_data_traffic_stats_most_recent_rssi,
+              "client_mac", "$1", "ms_mac_address", "(.+)"
+            )
+            * on (source, client_mac) group_left (wlc, ssid, site_tag, band, device_group, badge_model)
+              wireless_badge_client_mdt_identity
+          )
+
+      - record: wireless_badge_client_snr_db
+        expr: |
+          max by (wlc, ssid, site_tag, band, device_group, badge_model, client_mac) (
+            label_replace(
+              Cisco_IOS_XE_wireless_client_oper:client_oper_data_traffic_stats_most_recent_snr,
+              "client_mac", "$1", "ms_mac_address", "(.+)"
+            )
+            * on (source, client_mac) group_left (wlc, ssid, site_tag, band, device_group, badge_model)
+              wireless_badge_client_mdt_identity
+          )
+
+      # Retry percentage uses a 5-minute counter window to smooth sparse client
+      # counter deltas. Cisco defines data-retries as client retransmit attempts
+      # and pkts-rx as packets received from the mobile station, so this uses the
+      # client transmit direction: retries / (client packets + retries).
+      - record: wireless_badge_client_tx_retries_5m
+        expr: |
+          max by (wlc, ssid, site_tag, band, device_group, badge_model, client_mac) (
+            sum by (source, client_mac) (
+              label_replace(
+                clamp_min(
+                  increase(Cisco_IOS_XE_wireless_client_oper:client_oper_data_traffic_stats_data_retries[5m]),
+                  0
+                ),
+                "client_mac", "$1", "ms_mac_address", "(.+)"
+              )
+            )
+            * on (source, client_mac) group_left (wlc, ssid, site_tag, band, device_group, badge_model)
+              wireless_badge_client_mdt_identity
+          )
+
+      - record: wireless_badge_client_tx_packets_5m
+        expr: |
+          max by (wlc, ssid, site_tag, band, device_group, badge_model, client_mac) (
+            sum by (source, client_mac) (
+              label_replace(
+                clamp_min(
+                  increase(Cisco_IOS_XE_wireless_client_oper:client_oper_data_traffic_stats_pkts_rx[5m]),
+                  0
+                ),
+                "client_mac", "$1", "ms_mac_address", "(.+)"
+              )
+            )
+            * on (source, client_mac) group_left (wlc, ssid, site_tag, band, device_group, badge_model)
+              wireless_badge_client_mdt_identity
+          )
+
+      - record: wireless_badge_client_tx_retry_attempts_5m
+        expr: |
+          wireless_badge_client_tx_packets_5m
+          +
+          wireless_badge_client_tx_retries_5m
+
+      - record: wireless_badge_client_tx_retry_pct
+        expr: |
+          (
+            100 * wireless_badge_client_tx_retries_5m
+            /
+            clamp_min(wireless_badge_client_tx_retry_attempts_5m, 1)
+          )
+          and on (wlc, ssid, site_tag, band, device_group, badge_model, client_mac)
+            wireless_badge_client_tx_retry_attempts_5m > 0
+
+      # Compatibility aliases for older dashboards and saved queries. The Cisco
+      # source is client transmit direction, so new dashboards should use tx_*.
+      - record: wireless_badge_client_rx_retries_5m
+        expr: wireless_badge_client_tx_retries_5m
+
+      - record: wireless_badge_client_rx_packets_5m
+        expr: wireless_badge_client_tx_packets_5m
+
+      - record: wireless_badge_client_rx_retry_attempts_5m
+        expr: wireless_badge_client_tx_retry_attempts_5m
+
+      - record: wireless_badge_client_rx_retry_pct
+        expr: wireless_badge_client_tx_retry_pct
+
+      # RUN-state latency is the WLC mobility-history time until the client
+      # reached RUN state. It is onboarding/client-state timing, not RTP latency
+      # and not the AP traffic-distribution voice AC latency.
+      - record: wireless_badge_client_run_state_latency_us
+        expr: |
+          max by (wlc, ssid, site_tag, band, device_group, badge_model, client_mac) (
+            Cisco_IOS_XE_wireless_client_oper:client_oper_data_mm_if_client_history_mobility_history_entry_run_latency
+            * 1000
+            * on (source, client_mac) group_left (wlc, ssid, site_tag, band, device_group, badge_model)
+              wireless_badge_client_mdt_identity
+          )
+
+      # Legacy dashboard compatibility only: this is sourced from the same WLC
+      # run_latency field as RUN-state latency. Do not label it as true voice
+      # handoff interruption or full roaming duration in dashboards.
+      - record: wireless_badge_client_max_roaming_duration_ms
+        expr: |
+          max by (wlc, ssid, site_tag, band, device_group, badge_model, client_mac) (
+            Cisco_IOS_XE_wireless_client_oper:client_oper_data_mm_if_client_history_mobility_history_entry_run_latency
+            * on (source, client_mac) group_left (wlc, ssid, site_tag, band, device_group, badge_model)
+              wireless_badge_client_mdt_identity
+          )
+
+      # Placeholder duration records keep old dashboards from failing until
+      # distinct auth/association/DHCP duration sources are added.
+      - record: wireless_badge_client_average_auth_duration_ms
+        expr: |
+          0 * wireless_badge_client_mdt_identity
+
+      - record: wireless_badge_client_average_assoc_duration_ms
+        expr: |
+          0 * wireless_badge_client_mdt_identity
+
+      - record: wireless_badge_client_average_dhcp_duration_ms
+        expr: |
+          0 * wireless_badge_client_mdt_identity
+
+      - record: wireless_badge_client_session_duration_s
+        expr: |
+          0 * wireless_badge_client_mdt_identity
+
+      - record: wireless_badge_client_onboarding_attempts
+        expr: |
+          max by (wlc, ssid, site_tag, band, device_group, badge_model, client_mac) (
+            Cisco_IOS_XE_wireless_client_oper:client_oper_data_mm_if_client_stats_mblty_stats_intra_wncd_roam_count
+            * on (source, client_mac) group_left (wlc, ssid, site_tag, band, device_group, badge_model)
+              wireless_badge_client_mdt_identity
+          )
+
+      - record: wireless_badge_client_active_total
+        expr: |
+          count by (wlc, ssid, site_tag, band, device_group) (
+            max by (wlc, ssid, site_tag, band, device_group, client_mac) (
+              wireless_badge_client_present_cc
+            )
+          )
+
+      # FT adoption is the FT client count divided by all present Vocera badge
+      # clients. The denominator intentionally collapses per-client identity to
+      # avoid duplicate FT-state label cardinality.
+      - record: wireless_badge_client_ft_adoption_ratio
+        expr: |
+          sum by (wlc, ssid, site_tag, band, device_group) (
+            wireless_badge_client_ft_state_cc{ft_state="ft"}
+          )
+          /
+          clamp_min(
+            count by (wlc, ssid, site_tag, band, device_group) (
+              max by (wlc, ssid, site_tag, band, device_group, client_mac) (
+                wireless_badge_client_present_cc
+              )
+            ),
+            1
+          )
+
+      - record: wireless_badge_client_run_state_latency_p95_us
+        expr: |
+          quantile by (wlc, ssid, site_tag, band, device_group) (
+            0.95,
+            wireless_badge_client_run_state_latency_us
+          )
+
+      - record: wireless_badge_client_tx_retry_pct_avg
+        expr: |
+          (
+            100 *
+            sum by (wlc, ssid, site_tag, band, device_group) (
+              wireless_badge_client_tx_retries_5m
+            )
+            /
+            clamp_min(
+              sum by (wlc, ssid, site_tag, band, device_group) (
+                wireless_badge_client_tx_retry_attempts_5m
+              ),
+              1
+            )
+          )
+          and on (wlc, ssid, site_tag, band, device_group)
+            sum by (wlc, ssid, site_tag, band, device_group) (
+              wireless_badge_client_tx_retry_attempts_5m
+            ) > 0
+
+      - record: wireless_badge_client_tx_retry_pct_median
+        expr: |
+          quantile by (wlc, ssid, site_tag, band, device_group) (
+            0.5,
+            wireless_badge_client_tx_retry_pct
+          )
+
+      - record: wireless_badge_client_tx_retry_pct_p05
+        expr: |
+          quantile by (wlc, ssid, site_tag, band, device_group) (
+            0.05,
+            wireless_badge_client_tx_retry_pct
+          )
+
+      - record: wireless_badge_client_tx_retry_pct_p95
+        expr: |
+          quantile by (wlc, ssid, site_tag, band, device_group) (
+            0.95,
+            wireless_badge_client_tx_retry_pct
+          )
+
+      - record: wireless_badge_client_rx_retry_pct_avg
+        expr: wireless_badge_client_tx_retry_pct_avg
+
+      - record: wireless_badge_client_rx_retry_pct_median
+        expr: wireless_badge_client_tx_retry_pct_median
+
+      - record: wireless_badge_client_rx_retry_pct_p05
+        expr: wireless_badge_client_tx_retry_pct_p05
+
+      - record: wireless_badge_client_rx_retry_pct_p95
+        expr: wireless_badge_client_tx_retry_pct_p95
+
+      # Compatibility aggregate for the legacy roam-duration record above. It
+      # should be hidden or renamed wherever dashboards need true roam semantics.
+      - record: wireless_badge_client_roam_duration_p95_ms
+        expr: |
+          quantile by (wlc, ssid, site_tag, band, device_group) (
+            0.95,
+            wireless_badge_client_max_roaming_duration_ms
+          )
+
+      - record: wireless_badge_client_auth_duration_p95_ms
+        expr: |
+          quantile by (wlc, ssid, site_tag, band, device_group) (
+            0.95,
+            wireless_badge_client_average_auth_duration_ms
+          )
+
+      - record: wireless_badge_client_assoc_duration_p95_ms
+        expr: |
+          quantile by (wlc, ssid, site_tag, band, device_group) (
+            0.95,
+            wireless_badge_client_average_assoc_duration_ms
+          )
+
+      - record: wireless_badge_client_dhcp_duration_p95_ms
+        expr: |
+          quantile by (wlc, ssid, site_tag, band, device_group) (
+            0.95,
+            wireless_badge_client_average_dhcp_duration_ms
+          )

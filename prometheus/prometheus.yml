@@ -1,0 +1,51 @@
+# Local Prometheus keeps 30-day scrape data for rule evaluation, then
+# remote-writes the normalized platform and wireless metrics into the local
+# single-node Mimir backend used by Grafana.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+  scrape_timeout: 5s
+
+remote_write:
+  - url: http://127.0.0.1:9009/api/v1/push
+    # Queue settings are sized for bursty wireless MDT/textfile updates without
+    # letting remote-write memory grow unbounded on the VM.
+    queue_config:
+      capacity: 10000
+      max_samples_per_send: 2000
+      max_shards: 10
+    # Keep raw MDT scrape data in local Prometheus for rule evaluation and
+    # real-time diagnostics, but do not remote-write high-cardinality raw Cisco
+    # operational trees into the local Mimir VM.
+    write_relabel_configs:
+      - source_labels: [__name__]
+        regex: "ALERTS.*|up|wireless_.*|vocera_.*|platform_.*|kube_.*|mimir_.*|cortex_.*|prometheus_.*|process_.*|go_.*|scrape_.*"
+        action: keep
+
+rule_files:
+  # The deploy script copies repo-managed rules into these directories on the
+  # host. Missing glob matches are tolerated by Prometheus.
+  - /etc/prometheus/rules/platform/*.yml
+  - /etc/prometheus/rules/wireless/*.yml
+  - /etc/prometheus/rules/ingest/*.yml
+  - /etc/prometheus/rules/avasure/*.yml
+
+scrape_configs:
+  - job_name: "telegraf"
+    # Telegraf endpoint currently needs >6s; 10s/9s is the lowest stable scrape budget.
+    scrape_interval: 10s
+    scrape_timeout: 9s
+    static_configs:
+      - targets: ["127.0.0.1:9273"]
+
+  - job_name: "node_exporter"
+    # Node exporter also exposes the wireless RF textfile collector output.
+    scrape_interval: 5s
+    scrape_timeout: 5s
+    static_configs:
+      - targets: ["127.0.0.1:9100"]
+
+  - job_name: "mimir"
+    # Scrape Mimir itself so platform-health rules can report backend health.
+    static_configs:
+      - targets: ["127.0.0.1:9009"]

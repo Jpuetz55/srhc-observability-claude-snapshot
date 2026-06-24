@@ -1,0 +1,51 @@
+# Example job for per-badge Catalyst Center collection. It complements Cisco MDT
+# recording rules by collecting client detail for a bounded set of recently
+# active Vocera badges.
+jobs:
+  - name: vocera-badge-80211r-impact
+    device_group: VOCERA
+    wlc: SRHC-WLC-40G-SEC
+    ssids:
+      - srhcvoice1
+    badge_models:
+      - C1000
+      - V5000
+    mac_oui_allowlist:
+      - "00:09:ef"
+    # Limit DNAC API calls to the N most-recently-active badges.
+    # Each cycle queries the SQLite history (outputs.sqlite) for badges seen
+    # within active_window_seconds and picks the top N by recency. The static
+    # mac_addresses / mac_addresses_env / mac_inventory_path are only used to
+    # bootstrap the DB when the history is empty.
+    max_badges: 50
+    active_window_seconds: 3600  # 1h
+    collection_interval_seconds: 300
+
+    # Keep real badge MAC inventory out of Git. Use a local config,
+    # VOCERA_BADGE_MACS as a comma/space separated list, or a generated file.
+    mac_addresses_env: VOCERA_BADGE_MACS
+    mac_inventory_path_env: VOCERA_BADGE_MACS_FILE
+
+    # Auto-discover active badges from Prometheus/Mimir MDT data — no static
+    # MAC list required. The default discovery_query picks the top max_badges
+    # client_macs from wireless_badge_client_present over active_window_seconds.
+    prometheus:
+      url_env: PROMETHEUS_URL
+      verify_tls: true
+      # discovery_query: "topk(50, max by (client_mac) (last_over_time(wireless_badge_client_present[60m])))"
+
+    catalyst_center:
+      # Credentials and controller URL are read from the environment at runtime
+      # so this example can stay committed without secrets.
+      base_url_env: DNAC_BASE_URL
+      username_env: DNAC_USERNAME
+      password_env: DNAC_PASSWORD
+      verify_tls: true
+    outputs:
+      # Raw JSON supports parser troubleshooting; prometheus is the textfile
+      # collector payload; SQLite stores history for active-badge selection.
+      raw: data/wireless-rf/raw/badge_client_raw.json
+      csv: data/wireless-rf/exports/badge_client_snapshot.csv
+      json: data/wireless-rf/exports/badge_client_summary.json
+      prometheus: data/wireless-rf/exports/badge_client.prom
+      sqlite: data/wireless-rf/badge_client.sqlite

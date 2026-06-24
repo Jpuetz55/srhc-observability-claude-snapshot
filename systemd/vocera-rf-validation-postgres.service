@@ -1,0 +1,26 @@
+[Unit]
+Description=Vocera RF Validation PostgreSQL datasource
+Documentation=file:/opt/grafana-mimir-observability/docs/wireless/vocera-badge-ekahau-rf-validation-runbook.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment=VOCERA_RF_VALIDATION_POSTGRES_CONTAINER_NAME=vocera-rf-validation-postgres
+Environment=VOCERA_RF_VALIDATION_POSTGRES_IMAGE=docker.io/postgres:16.4-alpine
+Environment=VOCERA_RF_VALIDATION_POSTGRES_PORT=15433
+Environment=VOCERA_RF_VALIDATION_POSTGRES_DB=vocera_rf_validation
+Environment=VOCERA_RF_VALIDATION_POSTGRES_USER=vocera_rf_validation
+Environment=VOCERA_RF_VALIDATION_POSTGRES_DATA_DIR=/var/lib/vocera-rf-validation/postgres
+Environment=VOCERA_RF_VALIDATION_POSTGRES_INIT_DIR=/etc/vocera-rf-validation-postgres/init
+EnvironmentFile=-/etc/default/vocera-rf-validation-postgres
+EnvironmentFile=-/etc/grafana-mimir-observability/secrets/vocera-rf-validation-postgres.env
+ExecStartPre=-/usr/bin/podman rm -f ${VOCERA_RF_VALIDATION_POSTGRES_CONTAINER_NAME}
+ExecStart=/usr/bin/podman run --name ${VOCERA_RF_VALIDATION_POSTGRES_CONTAINER_NAME} --pull=missing -p 127.0.0.1:${VOCERA_RF_VALIDATION_POSTGRES_PORT}:5432 -e POSTGRES_DB=${VOCERA_RF_VALIDATION_POSTGRES_DB} -e POSTGRES_USER=${VOCERA_RF_VALIDATION_POSTGRES_USER} -e POSTGRES_PASSWORD=${VOCERA_RF_VALIDATION_POSTGRES_PASSWORD} -v ${VOCERA_RF_VALIDATION_POSTGRES_DATA_DIR}:/var/lib/postgresql/data:Z -v ${VOCERA_RF_VALIDATION_POSTGRES_INIT_DIR}:/docker-entrypoint-initdb.d:ro,Z ${VOCERA_RF_VALIDATION_POSTGRES_IMAGE}
+ExecStop=/usr/bin/podman stop -t 10 ${VOCERA_RF_VALIDATION_POSTGRES_CONTAINER_NAME}
+ExecStopPost=-/usr/bin/podman rm -f ${VOCERA_RF_VALIDATION_POSTGRES_CONTAINER_NAME}
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=300s
+
+[Install]
+WantedBy=multi-user.target

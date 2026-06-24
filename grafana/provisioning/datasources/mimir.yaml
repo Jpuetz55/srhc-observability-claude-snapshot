@@ -1,0 +1,43 @@
+# Provisioned Grafana data sources. The deploy script keeps this file as the
+# desired state for the local Grafana instance.
+apiVersion: 1
+
+deleteDatasources:
+  # Delete first so UID/type changes converge cleanly when Grafana reloads
+  # provisioning.
+  - name: Mimir
+    orgId: 1
+  - name: Loki
+    orgId: 1
+
+datasources:
+  - name: Mimir
+    type: prometheus
+    # Stable UID is referenced from dashboards and alerting provisioning.
+    uid: efbjrspdsbl6oa
+    orgId: 1
+    access: proxy
+    url: http://127.0.0.1:9009/prometheus
+    isDefault: true
+    version: 1
+    editable: false
+    jsonData:
+      # Local Mimir is tenant-scoped with the observability org ID.
+      httpHeaderName1: X-Scope-OrgID
+    secureJsonData:
+      httpHeaderValue1: observability
+
+  - name: Loki
+    type: loki
+    uid: loki_dev
+    orgId: 1
+    access: proxy
+    url: http://127.0.0.1:3100
+    isDefault: false
+    version: 1
+    editable: false
+    jsonData:
+      # Local Loki is tenant-scoped with the observability org ID.
+      httpHeaderName1: X-Scope-OrgID
+    secureJsonData:
+      httpHeaderValue1: observability

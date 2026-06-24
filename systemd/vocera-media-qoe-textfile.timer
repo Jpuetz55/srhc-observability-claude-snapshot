@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh Vocera media PCAP QoE textfile metrics
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=15s
+Persistent=true
+Unit=vocera-media-qoe-textfile.service
+
+[Install]
+WantedBy=timers.target

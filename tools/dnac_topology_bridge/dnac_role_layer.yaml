@@ -1,0 +1,56 @@
+# DNAC role / family / hostname -> hierarchy layer mapping for
+# bridge_dnac_to_canonical.py.
+#
+# Layers (top -> bottom in the topology dashboard):
+#   0 = Edge / WAN / Internet routers / firewalls
+#   1 = Core
+#   2 = Distribution
+#   3 = Access switches / Wireless Controllers
+#   4 = Endpoints (APs, phones, IoT)
+#   5 = Other / unknown
+#
+# Resolution order:
+#   1. hostname_patterns (glob, case-insensitive, first match wins)
+#   2. role exact match (case-insensitive) on the DNAC `role` field
+#   3. family substring match on the DNAC `role` field (DNAC sometimes
+#      returns the device family in the role column)
+#   4. fall back to layer 5
+
+# DNAC documented role values
+role:
+  BORDER ROUTER: 0
+  BORDER GATEWAY: 0
+  CORE: 1
+  DISTRIBUTION: 2
+  ACCESS: 3
+  UNIFIED AP: 4
+  UNKNOWN: 5
+
+# DNAC family fallback - matched as substring on the role string
+family:
+  ROUTERS: 0
+  SWITCHES AND HUBS: 2    # generic switches default to distribution; override below
+  WIRELESS CONTROLLER: 3
+  UNIFIED AP: 4
+  VOICE AND TELEPHONY: 4
+
+# Hostname pattern overrides - glob-style, applied case-insensitively to both
+# hostname and device_id. First match wins. Edit this list to correct any
+# device whose role/family lookup lands on the wrong layer.
+hostname_patterns:
+  - pattern: "*CORE*"
+    layer: 1
+  - pattern: "*COR-*"
+    layer: 1
+  - pattern: "*-COR*"
+    layer: 1
+  - pattern: "*DATA*"
+    layer: 1
+  - pattern: "*DIST*"
+    layer: 2
+  - pattern: "*FW*"
+    layer: 0
+  - pattern: "*EDGE*"
+    layer: 0
+  - pattern: "*WAN*"
+    layer: 0

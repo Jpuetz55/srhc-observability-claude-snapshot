@@ -1,0 +1,26 @@
+[Unit]
+Description=Publish Vocera media PCAP QoE into node exporter textfile metrics
+Documentation=file:/opt/grafana-mimir-observability/docs/wireless/vocera-media-dnac-icap-runbook.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/grafana-mimir-observability
+Environment=VOCERA_MEDIA_QOE_RAW_DIR=/var/lib/vocera-media-qoe/raw
+Environment=VOCERA_MEDIA_QOE_PCAP=
+Environment=VOCERA_MEDIA_QOE_CONFIG=config/vocera-media-qoe.yaml
+Environment=VOCERA_MEDIA_QOE_PROM_OUT=data/vocera-media-qoe/out/vocera_media_qoe.prom
+Environment=VOCERA_MEDIA_QOE_JSON_OUT=data/vocera-media-qoe/out/vocera_media_qoe_summary.json
+Environment=VOCERA_MEDIA_QOE_PARSED_DIR=data/vocera-media-qoe/out/captures
+Environment=VOCERA_MEDIA_QOE_SQL_OUT=data/vocera-media-qoe/out/vocera_media_qoe_import.sql
+Environment=VOCERA_MEDIA_QOE_ARCHIVE_DIR=
+Environment=VOCERA_MEDIA_QOE_DATABASE_URL=
+Environment=VOCERA_MEDIA_QOE_PSQL_BIN=psql
+Environment=TEXTFILE_COLLECTOR_DIR=/var/lib/node_exporter/textfile_collector
+EnvironmentFile=-/etc/default/vocera-media-qoe-textfile
+ExecStart=/usr/bin/bash scripts/run_vocera_media_qoe_textfile.sh
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true

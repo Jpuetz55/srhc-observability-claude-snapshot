@@ -1,0 +1,10 @@
+2026-05-21 09:47:05.000 brcmfmac: roam_reason = BRCMF_E_REASON_LOW_RSSI[1]
+2026-05-21 09:47:05.010 brcmfmac: Found 2 total APs and 1 roam candidate APs
+2026-05-21 09:47:05.020 brcmfmac: outage time = 101 ms, total_scan_time = 903 ms
+2026-05-21 09:47:05.030 brcmfmac: [0*] [f0:d8:05:1f:74:96] [Channel: 140] [RSSI = -46] [CU = 3%] [Score = 100]
+2026-05-21 09:47:05.040 brcmfmac: [1] [50:5c:88:02:82:59] [Channel: 1] [RSSI = -69] [CU = 12%] [Score = 68]
+2026-05-21 09:47:05.050 NCI : Connected to network, channel=140,bssid=f0:d8:05:1f:74:96,ssid='srhcvoice2'
+2026-05-21 09:47:05.055 NCI : Radio signal info,sig_bars=5,noise=-90,level=-46,snr=44,channel=140,bandwidth=20,powersave=2,cu=1
+2026-05-21 09:47:05.060 wlan0: RRM-NEIGHBOR-REP-RECEIVED bssid=f0:d8:05:1f:74:96 info=0x2f7 op_class=121 chan=140 phy_type=7
+2026-05-21 09:47:05.070 wlan0: RRM-NEIGHBOR-REP-RECEIVED bssid=50:5c:88:00:ce:a6 info=0x2f7 op_class=125 chan=157 phy_type=7
+05/21/26 09:47:06.123456 loca.inf bapp:1:1: SIG1: RX signal=P1PushNotification,body={"issuedAt":"2026-05-21T14:47:06.12","sentAt":"2026-05-21T14:47:06.1234567Z"}

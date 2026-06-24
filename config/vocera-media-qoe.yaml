@@ -1,0 +1,113 @@
+# Example offline Vocera media QoE analyzer config. Keep site-specific values in
+# an untracked copy, for example config/vocera-media-qoe.yaml.
+site: srhc
+capture_point: wlc_epc
+
+# Expected DSCP for voice media. 46 is EF.
+expected_dscp: 46
+
+vocera_multicast:
+  ipv4_pool:
+    cidr: 230.230.0.0/20
+    first_usable: 230.230.0.1
+    last_usable: 230.230.15.254
+  ethernet_mapping:
+    enabled: true
+    mapping: rfc1112_ipv4_multicast
+    expected_mac_start: "01:00:5e:66:00:01"
+    expected_mac_end: "01:00:5e:66:0f:fe"
+  control_protocols:
+    - igmp
+    - udp
+    - rtp
+  expected_dscp: 46
+
+wlc_capture:
+  wlc_name: SRHC-WLC-40G-SEC
+  capture_name: VOCERA_C1000_001
+  wlc_interface: Port-channel1
+  capture_filter_mode: vocera_pool_control
+  vocera_vlan: 684
+  collector_host: 10.0.128.107
+  collector_scp_username: appsadmin
+  collector_scp_port: 22
+  ring_file_count: 5
+  ring_file_size_mb: 100
+  continuous_export_enabled: false
+  short_validation_duration_seconds: 90
+  sender:
+    name: V5000 Sender
+    model: V5000
+    ip: 10.16.88.228
+    mac: 00:09:ef:54:5f:46
+  receiver:
+    name: C1000 Receiver
+    model: C1000
+    ip: 10.16.88.230
+    mac: 00:09:ef:61:0b:f7
+
+servers:
+  - name: vocera-server
+    ip: 10.205.0.1
+
+badge_subnets:
+  - 10.16.84.0/22
+  - 10.16.88.0/22
+
+# Devices under test. The parser matches these by IP address and annotates each
+# stream so Grafana can compare the production-config control device against the
+# test-config device.
+devices:
+  - name: V5000 Sender
+    role: sender
+    config: production
+    ip: 10.16.88.228
+    mac: 00:09:ef:54:5f:46
+  - name: C1000 Receiver
+    role: receiver
+    config: production
+    ip: 10.16.88.230
+    mac: 00:09:ef:61:0b:f7
+
+# Leave empty during discovery. After confirming media ports, use tight ranges.
+media_ports: []
+
+# RTP clock rates by payload type. The default keeps dynamic/proprietary
+# RTP-like payloads on the common narrowband voice 8 kHz clock until verified.
+payload_clock_rates:
+  default: 8000
+  0: 8000
+  8: 8000
+  9: 8000
+  18: 8000
+
+# Ignore packets whose pcap timestamp is later than the collector clock by more
+# than this tolerance. This prevents corrupted/future packet records from
+# poisoning capture age and interarrival gap calculations.
+max_capture_future_skew_seconds: 300
+
+# Require enough same-flow/same-SSRC packets before publishing RTP QoE metrics.
+# Sparse RTP-looking packets stay in UDP timing only.
+min_rtp_qoe_packets: 20
+
+# Ignore impossible RTP timestamp/arrival deltas while calculating RFC 3550
+# jitter. Larger deltas are treated as source discontinuities or corrupt
+# headers, not live jitter.
+max_rtp_transit_delta_seconds: 1.0
+
+rtp_plausibility:
+  strict: true
+  require_known_clock_rate: false
+  min_packets: 20
+  min_duration_seconds: 0.25
+  max_interarrival_ms: 500
+  max_jitter_ms: 500
+  min_sequence_progression_ratio: 0.80
+  min_timestamp_progression_ratio: 0.80
+  max_timestamp_wallclock_error_ms: 250
+  min_packetization_ms: 5
+  max_packetization_ms: 100
+  max_loss_ratio: 0.50
+  max_duplicate_ratio: 0.50
+  max_out_of_order_ratio: 0.50
+  debug_packet_limit: 20

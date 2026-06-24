@@ -1,0 +1,31 @@
+# Provisioned datasource consumed by the Network Topology node graph.
+# The topology data owner is the sibling Network-Topology repo; this Grafana
+# instance reads the published tables through the local PostgreSQL listener.
+apiVersion: 1
+
+deleteDatasources:
+  - name: Topology PostgreSQL
+    orgId: 1
+
+datasources:
+  - name: Topology PostgreSQL
+    uid: TOPOLOGY_DS
+    type: postgres
+    orgId: 1
+    access: proxy
+    url: 127.0.0.1:15432
+    user: topology
+    isDefault: false
+    version: 2
+    editable: false
+    jsonData:
+      database: topology
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+    secureJsonData:
+      # Expanded from the env-var loaded by
+      # systemd-overrides/grafana-server.service.d/secrets.conf, which itself
+      # comes from /etc/grafana-mimir-observability/secrets/topology-postgres.env
+      # written by scripts/install_secrets.sh from secrets/postgres.env.sops.yaml.
+      password: ${TOPOLOGY_POSTGRES_PASSWORD}

@@ -1,0 +1,26 @@
+[Unit]
+Description=Network Topology PostgreSQL datasource
+Documentation=file:/home/appsadmin/grafana-mimir-observability/docs/network-topology-grafana-integration.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment=TOPOLOGY_POSTGRES_CONTAINER_NAME=network-topology-postgres
+Environment=TOPOLOGY_POSTGRES_IMAGE=docker.io/postgres:16.4-alpine
+Environment=TOPOLOGY_POSTGRES_PORT=15432
+Environment=TOPOLOGY_POSTGRES_DB=topology
+Environment=TOPOLOGY_POSTGRES_USER=topology
+Environment=TOPOLOGY_POSTGRES_DATA_DIR=/var/lib/network-topology/postgres
+Environment=TOPOLOGY_POSTGRES_INIT_DIR=/etc/network-topology-postgres/init
+EnvironmentFile=-/etc/default/network-topology-postgres
+EnvironmentFile=-/etc/grafana-mimir-observability/secrets/topology-postgres.env
+ExecStartPre=-/usr/bin/podman rm -f ${TOPOLOGY_POSTGRES_CONTAINER_NAME}
+ExecStart=/usr/bin/podman run --name ${TOPOLOGY_POSTGRES_CONTAINER_NAME} --pull=missing -p 127.0.0.1:${TOPOLOGY_POSTGRES_PORT}:5432 -e POSTGRES_DB=${TOPOLOGY_POSTGRES_DB} -e POSTGRES_USER=${TOPOLOGY_POSTGRES_USER} -e POSTGRES_PASSWORD=${TOPOLOGY_POSTGRES_PASSWORD} -v ${TOPOLOGY_POSTGRES_DATA_DIR}:/var/lib/postgresql/data:Z -v ${TOPOLOGY_POSTGRES_INIT_DIR}:/docker-entrypoint-initdb.d:ro,Z ${TOPOLOGY_POSTGRES_IMAGE}
+ExecStop=/usr/bin/podman stop -t 10 ${TOPOLOGY_POSTGRES_CONTAINER_NAME}
+ExecStopPost=-/usr/bin/podman rm -f ${TOPOLOGY_POSTGRES_CONTAINER_NAME}
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=300s
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,25 @@
+[Unit]
+Description=Run wireless path RTT probes into node exporter textfile metrics
+Documentation=file:/opt/grafana-mimir-observability/docs/path-probe-observability.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/grafana-mimir-observability
+# Keep the default pointed at the site-specific config. The installer creates
+# /etc/default/wireless-path-probe once and leaves operator edits intact.
+Environment=PATH_PROBE_CONFIG=config/path-probe.yaml
+Environment=PATH_PROBE_PROM_OUT=data/path-probe/out/path_probe.prom
+Environment=PATH_PROBE_JSON_OUT=data/path-probe/out/path_probe_summary.json
+Environment=PATH_PROBE_JOB=
+Environment=TEXTFILE_COLLECTOR_DIR=/var/lib/node_exporter/textfile_collector
+EnvironmentFile=-/etc/default/wireless-path-probe
+ExecStartPre=/usr/bin/test -f ${PATH_PROBE_CONFIG}
+ExecStart=/usr/bin/make path-probe-run PATH_PROBE_CONFIG=${PATH_PROBE_CONFIG} PATH_PROBE_PROM_OUT=${PATH_PROBE_PROM_OUT} PATH_PROBE_JSON_OUT=${PATH_PROBE_JSON_OUT} PATH_PROBE_JOB=${PATH_PROBE_JOB}
+ExecStart=/usr/bin/install -D -m 0644 ${PATH_PROBE_PROM_OUT} ${TEXTFILE_COLLECTOR_DIR}/path_probe.prom
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/grafana-mimir-observability/data /var/lib/node_exporter/textfile_collector

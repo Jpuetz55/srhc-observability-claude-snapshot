@@ -1,0 +1,25 @@
+[Unit]
+Description=Publish Vocera iperf QoE uploads into node exporter textfile metrics
+Documentation=file:/opt/grafana-mimir-observability/docs/vocera-iperf-qoe.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/grafana-mimir-observability
+# Newer laptop uploads carry metadata; this optional config supplies labels for
+# older/raw iperf JSON and friendly names for target IPs.
+Environment=VOCERA_IPERF_QOE_CONFIG=config/vocera-iperf-qoe.example.yaml
+Environment=VOCERA_IPERF_QOE_INCOMING_ROOT=/var/lib/vocera-iperf-qoe/incoming
+Environment=VOCERA_IPERF_QOE_PROM_OUT=data/vocera-iperf-qoe/out/vocera_iperf_qoe.prom
+Environment=VOCERA_IPERF_QOE_JSON_OUT=data/vocera-iperf-qoe/out/vocera_iperf_qoe_summary.json
+Environment=TEXTFILE_COLLECTOR_DIR=/var/lib/node_exporter/textfile_collector
+EnvironmentFile=-/etc/default/vocera-iperf-qoe-textfile
+ExecStartPre=/usr/bin/test -d ${VOCERA_IPERF_QOE_INCOMING_ROOT}
+ExecStart=/usr/bin/make vocera-iperf-qoe-parse VOCERA_IPERF_QOE_CONFIG=${VOCERA_IPERF_QOE_CONFIG} VOCERA_IPERF_QOE_INCOMING_ROOT=${VOCERA_IPERF_QOE_INCOMING_ROOT} VOCERA_IPERF_QOE_PROM_OUT=${VOCERA_IPERF_QOE_PROM_OUT} VOCERA_IPERF_QOE_JSON_OUT=${VOCERA_IPERF_QOE_JSON_OUT}
+ExecStart=/usr/bin/install -D -m 0644 ${VOCERA_IPERF_QOE_PROM_OUT} ${TEXTFILE_COLLECTOR_DIR}/vocera_iperf_qoe.prom
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/grafana-mimir-observability/data /var/lib/node_exporter/textfile_collector

@@ -1,0 +1,25 @@
+{
+  "project": {
+    "name": "SRHC Basement Validation"
+  },
+  "surveyData": {
+    "measurements": [
+      {
+        "id": "p1",
+        "timestamp": "2026-05-21T09:47:05-05:00",
+        "floor": "Basement",
+        "area": "Lab",
+        "x": 12.3,
+        "y": 45.6
+      },
+      {
+        "id": "p2",
+        "timestamp": "2026-05-21T09:48:00-05:00",
+        "floor": "Basement",
+        "area": "Lab",
+        "x": 16.0,
+        "y": 47.1
+      }
+    ]
+  }
+}

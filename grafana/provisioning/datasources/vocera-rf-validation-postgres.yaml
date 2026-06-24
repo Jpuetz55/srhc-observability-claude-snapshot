@@ -1,0 +1,46 @@
+# Provisioned datasource consumed by the Vocera Badge vs Ekahau RF Validation dashboard.
+apiVersion: 1
+
+deleteDatasources:
+  - name: Vocera RF Validation PostgreSQL
+    orgId: 1
+  - name: Vocera RF Validation PostgreSQL
+    orgId: 2
+
+datasources:
+  - name: Vocera RF Validation PostgreSQL
+    uid: VOCERA_RF_VALIDATION_DS
+    type: postgres
+    orgId: 1
+    access: proxy
+    url: 127.0.0.1:15433
+    user: vocera_rf_validation
+    isDefault: false
+    version: 1
+    editable: false
+    jsonData:
+      database: vocera_rf_validation
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+    secureJsonData:
+      # See systemd-overrides/grafana-server.service.d/secrets.conf for how
+      # this env var is loaded; source-of-truth is secrets/postgres.env.sops.yaml.
+      password: ${VOCERA_RF_VALIDATION_POSTGRES_PASSWORD}
+  - name: Vocera RF Validation PostgreSQL
+    uid: VOCERA_RF_VALIDATION_DS
+    type: postgres
+    orgId: 2
+    access: proxy
+    url: 127.0.0.1:15433
+    user: vocera_rf_validation
+    isDefault: false
+    version: 1
+    editable: false
+    jsonData:
+      database: vocera_rf_validation
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+    secureJsonData:
+      password: ${VOCERA_RF_VALIDATION_POSTGRES_PASSWORD}

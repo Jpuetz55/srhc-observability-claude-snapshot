@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh Vocera iperf QoE textfile metrics
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=15s
+Persistent=true
+Unit=vocera-iperf-qoe-textfile.service
+
+[Install]
+WantedBy=timers.target

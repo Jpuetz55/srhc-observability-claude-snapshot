@@ -1,0 +1,59 @@
+name: Repo Validation
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pyyaml
+
+      - name: Install Prometheus promtool
+        run: |
+          set -euo pipefail
+          PROM_VERSION="2.53.4"
+          curl -fsSL -o /tmp/prometheus.tar.gz "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz"
+          tar -xzf /tmp/prometheus.tar.gz -C /tmp
+          sudo install -m 0755 "/tmp/prometheus-${PROM_VERSION}.linux-amd64/promtool" /usr/local/bin/promtool
+          promtool --version
+
+      - name: Install kustomize
+        run: |
+          set -euo pipefail
+          KUSTOMIZE_VERSION="5.7.1"
+          curl -fsSL -o /tmp/kustomize.tar.gz "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/v${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+          tar -xzf /tmp/kustomize.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/kustomize /usr/local/bin/kustomize
+          kustomize version
+
+      - name: Run tests
+        run: |
+          make test
+
+      - name: Validate Kustomize overlays
+        run: |
+          make kustomize-validate
+
+      - name: Validate dashboards/contracts in enforce mode
+        run: |
+          ENFORCE_DASHBOARD_METRIC_CONTRACT=1 make validate
+
+      - name: Check Prometheus rule syntax
+        run: |
+          shopt -s globstar
+          promtool check rules prometheus/rules/**/*.yml

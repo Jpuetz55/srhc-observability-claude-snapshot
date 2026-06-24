@@ -1,0 +1,22 @@
+# collected_at: 2026-05-21T09:47:05-05:00
+# command: show wireless client mac-address aabbccddeeff detail
+
+Client MAC Address : aa:bb:cc:dd:ee:ff
+Wireless LAN Network Name (SSID) : srhc-ipad-test
+BSSID : 50:5c:88:02:80:79
+Channel : 6
+Client IPv4 Address : 10.10.10.20
+
+Client Scan Reports
+  Last Report @: 05/21/2026 09:46:30
+BSSID              Channel RSSI     SNR
+50:5c:88:02:80:79 6       -71 dBm  SNR 27 dB
+18:f9:35:9e:d6:89 6       -72 dBm  SNR 25 dB
+
+Nearby AP Statistics
+BSSID              Channel RSSI     SNR
+f0:d8:05:1f:74:c9 1       -35 dBm  SNR 45 dB
+
+Client Statistics
+Radio Signal Strength Indicator : -33 dBm
+Signal to Noise Ratio : 55 dB

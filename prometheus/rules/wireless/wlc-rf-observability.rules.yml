@@ -1,0 +1,309 @@
+# Recording rules for AP RF context. The raw *_cli series come from parsed WLC
+# CLI snapshots, while the Cisco_IOS_XE_* series come from MDT telemetry; joins
+# here add controller/site/AP metadata to radio counters.
+groups:
+  - name: wireless-rf-observability
+    interval: 30s
+    rules:
+      # Neighbor and channel records preserve AP/radio labels for drilldown
+      # tables while site-level aggregates support summary panels.
+      - record: wireless_ap_neighbor_count
+        expr: |
+          max by (wlc, ap_name, site_tag, policy_tag, rf_tag, band, source, channel_family) (
+            wireless_ap_neighbor_count_cli
+          )
+
+      - record: wireless_ap_neighbor_count_mean_by_site
+        expr: |
+          avg by (wlc, site_tag, band) (
+            wireless_ap_neighbor_count
+          )
+
+      - record: wireless_ap_neighbor_count_stddev_by_site
+        expr: |
+          stddev by (wlc, site_tag, band) (
+            wireless_ap_neighbor_count
+          )
+
+      - record: wireless_ap_neighbor_count_min_by_site
+        expr: |
+          min by (wlc, site_tag, band) (
+            wireless_ap_neighbor_count
+          )
+
+      - record: wireless_ap_neighbor_count_max_by_site
+        expr: |
+          max by (wlc, site_tag, band) (
+            wireless_ap_neighbor_count
+          )
+
+      - record: wireless_ap_neighbor_rssi_mean_dbm
+        expr: |
+          max by (wlc, ap_name, site_tag, policy_tag, rf_tag, band, source, channel_family) (
+            wireless_ap_neighbor_rssi_mean_dbm_cli
+          )
+
+      - record: wireless_ap_neighbor_strongest_rssi_dbm
+        expr: |
+          max by (wlc, ap_name, site_tag, policy_tag, rf_tag, band, source, channel_family) (
+            wireless_ap_neighbor_strongest_rssi_dbm_cli
+          )
+
+      - record: wireless_ap_neighbor_weakest_rssi_dbm
+        expr: |
+          min by (wlc, ap_name, site_tag, policy_tag, rf_tag, band, source, channel_family) (
+            wireless_ap_neighbor_weakest_rssi_dbm_cli
+          )
+
+      - record: wireless_ap_neighbor_high_rssi_total
+        expr: |
+          max by (wlc, ap_name, site_tag, policy_tag, rf_tag, band, source, threshold_dbm, channel_family) (
+            wireless_ap_neighbor_high_rssi_total_cli
+          )
+
+      - record: wireless_ap_neighbor_unique_channels
+        expr: |
+          max by (wlc, ap_name, site_tag, policy_tag, rf_tag, band, source, channel_family) (
+            wireless_ap_neighbor_unique_channels_cli
+          )
+
+      - record: wireless_ap_current_channel
+        expr: |
+          max by (wlc, ap_name, site_tag, policy_tag, rf_tag, band, source, channel_family) (
+            wireless_ap_current_channel_cli
+          )
+
+      - record: wireless_ap_channel_width_mhz
+        expr: |
+          max by (wlc, ap_name, site_tag, policy_tag, rf_tag, band, source, channel_family) (
+            wireless_ap_channel_width_mhz_cli
+          )
+
+      - record: wireless_ap_receive_utilization_pct
+        expr: |
+          max by (wlc, ap_name, site_tag, policy_tag, rf_tag, band, source, channel_family) (
+            wireless_ap_receive_utilization_pct_cli
+          )
+
+      - record: wireless_ap_transmit_utilization_pct
+        expr: |
+          max by (wlc, ap_name, site_tag, policy_tag, rf_tag, band, source, channel_family) (
+            wireless_ap_transmit_utilization_pct_cli
+          )
+
+      - record: wireless_ap_channel_utilization_pct
+        expr: |
+          max by (wlc, ap_name, site_tag, policy_tag, rf_tag, band, source, channel_family) (
+            wireless_ap_channel_utilization_pct_cli
+          )
+
+      - record: wireless_ap_channel_is_dfs
+        expr: |
+          max by (wlc, ap_name, site_tag, policy_tag, rf_tag, band, source, channel_family) (
+            wireless_ap_channel_is_dfs_cli
+          )
+
+      # DFS summaries describe channel assignment state, not voice latency.
+      - record: wireless_ap_dfs_channel_count_by_site
+        expr: |
+          sum by (wlc, site_tag, band) (
+            wireless_ap_channel_is_dfs
+          )
+
+      - record: wireless_ap_dfs_ap_on_dfs_ratio
+        expr: |
+          sum by (wlc, site_tag, band) (wireless_ap_channel_is_dfs)
+          /
+          clamp_min(count by (wlc, site_tag, band) (wireless_ap_channel_is_dfs), 1)
+
+      - record: wireless_ap_dfs_cac_running
+        expr: |
+          max by (wlc, ap_name, site_tag, policy_tag, rf_tag, band, source, channel_family) (
+            wireless_ap_dfs_cac_running_cli
+          )
+
+      - record: wireless_ap_dfs_cac_running_count_by_site
+        expr: |
+          sum by (wlc, site_tag, band) (
+            wireless_ap_dfs_cac_running
+          )
+
+      - record: wireless_ap_dfs_radar_changes_total
+        expr: |
+          max by (wlc, ap_name, site_tag, policy_tag, rf_tag, band, source, channel_family) (
+            wireless_ap_dfs_radar_changes_total_cli
+          )
+
+      - record: wireless_ap_dfs_radar_changes_24h
+        expr: |
+          increase(wireless_ap_dfs_radar_changes_total[24h])
+
+      - record: wireless_ap_zero_wait_dfs_enabled
+        expr: |
+          max by (wlc, ap_name, site_tag, policy_tag, rf_tag, band, source, channel_family) (
+            wireless_ap_zero_wait_dfs_enabled_cli
+          )
+
+      # Metadata carrier built from AP MDT inventory. Multiplying radio counter
+      # rates by this series enriches them with names, tags, model, and location.
+      - record: wireless_ap_mdt_info
+        expr: |
+          max by (
+            source, ap_mac, ap_name, site_tag, policy_tag, rf_tag, model,
+            ap_location, stationing_type
+          ) (
+            0 *
+            label_replace(
+              label_replace(
+                label_replace(
+                  label_replace(
+                    label_replace(
+                      label_replace(
+                        label_replace(
+                          label_replace(
+                            Cisco_IOS_XE_wireless_access_point_oper:access_point_oper_data_capwap_data_device_detail_static_info_wtp_model_type,
+                            "ap_mac", "$1", "wtp_mac", "(.+)"
+                          ),
+                          "ap_name", "$1", "name", "(.+)"
+                        ),
+                        "site_tag", "$1", "tag_info_resolved_tag_info_resolved_site_tag", "(.+)"
+                      ),
+                      "policy_tag", "$1", "tag_info_resolved_tag_info_resolved_policy_tag", "(.+)"
+                    ),
+                    "rf_tag", "$1", "tag_info_resolved_tag_info_resolved_rf_tag", "(.+)"
+                  ),
+                  "model", "$1", "device_detail_static_info_ap_models_model", "(.+)"
+                ),
+                "ap_location", "$1", "ap_location_location", "(.+)"
+              ),
+              "stationing_type", "$1", "ap_stationing_type", "(.+)"
+            )
+            + 1
+          )
+
+      # Radio frame and error rates use MDT counters and inherit AP metadata via
+      # wireless_ap_mdt_info so RF panels can filter by site, policy, and model.
+      - record: wireless_ap_radio_tx_frame_rate_5m
+        expr: |
+          sum by (
+            source, ap_mac, ap_name, site_tag, policy_tag, rf_tag, slot_id,
+            model, ap_location
+          ) (
+            rate(Cisco_IOS_XE_wireless_access_point_oper:access_point_oper_data_radio_oper_stats_tx_frame_count[5m])
+            * on (source, ap_mac) group_left(ap_name, site_tag, policy_tag, rf_tag, model, ap_location)
+              wireless_ap_mdt_info
+          )
+
+      - record: wireless_ap_radio_rx_frame_rate_5m
+        expr: |
+          sum by (
+            source, ap_mac, ap_name, site_tag, policy_tag, rf_tag, slot_id,
+            model, ap_location
+          ) (
+            rate(Cisco_IOS_XE_wireless_access_point_oper:access_point_oper_data_radio_oper_stats_rx_data_frame_count[5m])
+            * on (source, ap_mac) group_left(ap_name, site_tag, policy_tag, rf_tag, model, ap_location)
+              wireless_ap_mdt_info
+          )
+
+      - record: wireless_ap_radio_retry_rate_5m
+        expr: |
+          sum by (
+            source, ap_mac, ap_name, site_tag, policy_tag, rf_tag, slot_id,
+            model, ap_location
+          ) (
+            rate(Cisco_IOS_XE_wireless_access_point_oper:access_point_oper_data_radio_oper_stats_retry_count[5m])
+            * on (source, ap_mac) group_left(ap_name, site_tag, policy_tag, rf_tag, model, ap_location)
+              wireless_ap_mdt_info
+          )
+
+      - record: wireless_ap_radio_multiple_retry_rate_5m
+        expr: |
+          sum by (
+            source, ap_mac, ap_name, site_tag, policy_tag, rf_tag, slot_id,
+            model, ap_location
+          ) (
+            rate(Cisco_IOS_XE_wireless_access_point_oper:access_point_oper_data_radio_oper_stats_multiple_retry_count[5m])
+            * on (source, ap_mac) group_left(ap_name, site_tag, policy_tag, rf_tag, model, ap_location)
+              wireless_ap_mdt_info
+          )
+
+      - record: wireless_ap_radio_failed_frame_rate_5m
+        expr: |
+          sum by (
+            source, ap_mac, ap_name, site_tag, policy_tag, rf_tag, slot_id,
+            model, ap_location
+          ) (
+            rate(Cisco_IOS_XE_wireless_access_point_oper:access_point_oper_data_radio_oper_stats_failed_count[5m])
+            * on (source, ap_mac) group_left(ap_name, site_tag, policy_tag, rf_tag, model, ap_location)
+              wireless_ap_mdt_info
+          )
+
+      - record: wireless_ap_radio_fcs_error_rate_5m
+        expr: |
+          sum by (
+            source, ap_mac, ap_name, site_tag, policy_tag, rf_tag, slot_id,
+            model, ap_location
+          ) (
+            rate(Cisco_IOS_XE_wireless_access_point_oper:access_point_oper_data_radio_oper_stats_fcs_error_count[5m])
+            * on (source, ap_mac) group_left(ap_name, site_tag, policy_tag, rf_tag, model, ap_location)
+              wireless_ap_mdt_info
+          )
+
+      - record: wireless_ap_radio_rx_error_frame_rate_5m
+        expr: |
+          sum by (
+            source, ap_mac, ap_name, site_tag, policy_tag, rf_tag, slot_id,
+            model, ap_location
+          ) (
+            rate(Cisco_IOS_XE_wireless_access_point_oper:access_point_oper_data_radio_oper_stats_rx_error_frame_count[5m])
+            * on (source, ap_mac) group_left(ap_name, site_tag, policy_tag, rf_tag, model, ap_location)
+              wireless_ap_mdt_info
+          )
+
+      - record: wireless_ap_radio_retry_per_100_tx_5m
+        expr: |
+          100
+          *
+          wireless_ap_radio_retry_rate_5m
+          /
+          clamp_min(wireless_ap_radio_tx_frame_rate_5m, 1)
+
+      # Per-100-frame ratios are easier to compare across APs than raw counter
+      # rates because they normalize by observed traffic volume.
+      - record: wireless_ap_radio_failure_per_100_tx_5m
+        expr: |
+          100
+          *
+          wireless_ap_radio_failed_frame_rate_5m
+          /
+          clamp_min(wireless_ap_radio_tx_frame_rate_5m, 1)
+
+      - record: wireless_ap_radio_fcs_per_100_rx_5m
+        expr: |
+          100
+          *
+          wireless_ap_radio_fcs_error_rate_5m
+          /
+          clamp_min(wireless_ap_radio_rx_frame_rate_5m, 1)
+
+      - record: wireless_ap_radio_stuck_resets_total
+        expr: |
+          max by (
+            source, ap_mac, ap_name, site_tag, policy_tag, rf_tag, slot_id,
+            model, ap_location
+          ) (
+            Cisco_IOS_XE_wireless_access_point_oper:access_point_oper_data_radio_oper_stats_ap_radio_stats_num_radio_stuck_reset
+            * on (source, ap_mac) group_left(ap_name, site_tag, policy_tag, rf_tag, model, ap_location)
+              wireless_ap_mdt_info
+          )
+
+      - record: wireless_ap_radio_noise_floor_dbm
+        expr: |
+          max by (
+            source, ap_mac, ap_name, site_tag, policy_tag, rf_tag, slot_id,
+            model, ap_location
+          ) (
+            Cisco_IOS_XE_wireless_access_point_oper:access_point_oper_data_radio_oper_stats_noise_floor
+            * on (source, ap_mac) group_left(ap_name, site_tag, policy_tag, rf_tag, model, ap_location)
+              wireless_ap_mdt_info
+          )

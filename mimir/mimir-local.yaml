@@ -1,0 +1,78 @@
+# Local VM Mimir deployment.
+# This is a single-node, filesystem-backed Mimir instance for collectors01.
+# Prometheus remote-writes to http://127.0.0.1:9009/api/v1/push and Grafana
+# queries http://127.0.0.1:9009/prometheus.
+multitenancy_enabled: false
+
+server:
+  # Bind HTTP and gRPC locally; Grafana and Prometheus access Mimir on the same
+  # host, so there is no need to expose this backend on the network.
+  http_listen_address: 127.0.0.1
+  http_listen_port: 9009
+  grpc_listen_address: 127.0.0.1
+  grpc_listen_port: 9095
+  log_level: info
+
+frontend:
+  # Single-binary mode still needs the query frontend to point at the local gRPC
+  # listener for internal request routing.
+  address: 127.0.0.1
+  port: 9095
+
+blocks_storage:
+  # Filesystem object storage keeps this VM deployment self-contained. The
+  # directory layout mirrors Mimir's component expectations.
+  backend: filesystem
+  bucket_store:
+    sync_dir: /var/lib/prometheus/mimir/tsdb-sync
+  filesystem:
+    dir: /var/lib/prometheus/mimir/blocks
+  tsdb:
+    dir: /var/lib/prometheus/mimir/tsdb
+
+compactor:
+  # All rings use memberlist with a single local instance; replication is set to
+  # one because there are no peer ingesters/store-gateways in this deployment.
+  data_dir: /var/lib/prometheus/mimir/compactor
+  sharding_ring:
+    kvstore:
+      store: memberlist
+
+distributor:
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: memberlist
+
+query_scheduler:
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: memberlist
+
+ingester:
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: memberlist
+    replication_factor: 1
+
+ruler_storage:
+  backend: filesystem
+  filesystem:
+    dir: /var/lib/prometheus/mimir/ruler-storage
+
+store_gateway:
+  sharding_ring:
+    instance_addr: 127.0.0.1
+    replication_factor: 1
+
+limits:
+  # Local single-node Mimir is fed by Prometheus remote_write after relabeling.
+  # These limits are intentionally above the defaults so dashboard queries do
+  # not stall during wireless telemetry bursts.
+  ingestion_rate: 50000
+  ingestion_burst_size: 250000
+  max_global_series_per_user: 500000
+  max_label_names_per_series: 80
+  compactor_blocks_retention_period: 365d

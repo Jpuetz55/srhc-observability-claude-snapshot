@@ -1,0 +1,34 @@
+# Example Vocera iperf QoE textfile exporter config. The exporter can run
+# without a config because newer laptop uploads carry metadata, but this file
+# lets older/raw iperf JSON inherit stable labels and friendly target names.
+
+collector: collectors01
+
+devices:
+  S-NW-PROBE1:
+    site: srhc
+    ssid: srhcvoice2
+    role: LaptopA-ClientToServer-And-PeerReceiver
+    mode: ClientToServer
+    tos: "0xb8"
+
+  S-NW-PROBE2:
+    site: srhc
+    ssid: srhcvoice2
+    role: LaptopB-ClientToClient-Tester
+    mode: ClientToPeer
+    tos: "0xb8"
+
+  S-NW-LT10:
+    site: srhc
+    ssid: srhcvoice-test
+    role: LaptopToServer-Tester
+    mode: ServerPair
+    tos: "0xb8"
+
+targets:
+  "10.16.88.233:5203":
+    name: S-NW-PROBE1
+
+  "10.205.0.20:5201":
+    name: server-vm

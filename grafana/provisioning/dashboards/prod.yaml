@@ -1,0 +1,18 @@
+# Grafana dashboard provisioning for the production dashboard tree promoted by
+# scripts/promote_repo_to_prod.sh.
+apiVersion: 1
+
+providers:
+  - name: repo-prod
+    orgId: 1
+    folder: ""
+    type: file
+    # Deleting a JSON file from the provisioned tree deletes the corresponding
+    # Grafana dashboard, keeping the instance aligned with Git.
+    disableDeletion: false
+    editable: false
+    updateIntervalSeconds: 10
+    options:
+      # Folders are inferred from the promoted filesystem structure.
+      path: /var/lib/grafana/dashboards-prod
+      foldersFromFilesStructure: true

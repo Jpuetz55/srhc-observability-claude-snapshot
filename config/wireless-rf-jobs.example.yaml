@@ -1,0 +1,44 @@
+# Example collection job for WLC RF and AP traffic-distribution evidence. The
+# collector runs global WLC commands once, per-AP auto-rf commands for RF
+# context, and per-AP traffic-distribution commands for voice AC latency.
+jobs:
+  - name: srhc-wlc-5ghz-rf-report
+    wlc: SRHC-WLC-40G-SEC
+    band: 5ghz
+    collection_method: catalyst_center_command_runner
+    catalyst_center:
+      # Environment variable names keep credentials and controller addresses out
+      # of the repo. The collector resolves them at runtime.
+      base_url_env: DNAC_BASE_URL
+      username_env: DNAC_USERNAME
+      password_env: DNAC_PASSWORD
+      wlc_management_ip_env: WLC_MANAGEMENT_IP
+      batch_size: 20
+      verify_tls: true
+    filters:
+      # These filters control which APs are included after the global AP summary
+      # is parsed. They do not affect the initial WLC command collection.
+      site_tag_regex: '^ST_SALIN_SRHC'
+      ap_name_regex: '^SF'
+    outputs:
+      # Raw preserves command output for parser debugging; prometheus is copied
+      # into node_exporter's textfile collector by the installer/service.
+      raw: data/wireless-rf/raw/wlc_rf_raw.txt
+      csv: data/wireless-rf/out/wlc_rf_snapshot.csv
+      json: data/wireless-rf/out/wlc_rf_summary.json
+      prometheus: data/wireless-rf/out/wlc_rf.prom
+      sqlite: data/wireless-rf/wlc_rf.sqlite
+    commands:
+      # Commands are grouped by execution scope so the collector can avoid
+      # unnecessary per-AP calls and still keep raw evidence in one file.
+      global:
+        - show ap tag summary
+        - show ap dot11 5ghz summary
+        - show ap dot11 5ghz channel
+        - show ap dot11 5ghz logging
+        - show logging | include DFS|RADAR|Radar|radar|CAC|DCA|RRM|channel
+      per_ap:
+        - show ap name {ap_name} auto-rf dot11 5ghz
+      per_ap_traffic_distribution:
+        - show wireless stats ap name {ap_name} traffic-distribution slot 0 latency access-category voice last-received
+        - show wireless stats ap name {ap_name} traffic-distribution slot 1 latency access-category voice last-received

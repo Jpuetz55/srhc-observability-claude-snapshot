@@ -1,0 +1,9 @@
+# Placeholder ConfigMap for Kubernetes-based Grafana dashboard mounting. The VM
+# deployment uses file provisioning from grafana/dashboards-prod instead.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: observability
+data:
+  README: "Mount repo-managed dashboard JSON into Grafana in your chosen runtime pattern."

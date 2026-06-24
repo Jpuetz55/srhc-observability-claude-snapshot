@@ -1,0 +1,87 @@
+show ap tag summary
+AP Name                          AP Mac          Site Tag Name   Policy Tag Name   RF Tag Name     Misconfigured  Tag Source
+-------------------------------------------------------------------------------------------------------------
+AP-ALPHA 0011.2233.4455 ST_MAIN POL_VOICE RF_VOICE
+AP-BRAVO 00aa.bbcc.ddee ST_BACK POL_DATA RF_DATA
+AP-CHARLIE ST_CLI_ONLY POL_CLI_ONLY RF_CLI_ONLY No Static
+
+show ap dot11 5ghz summary
+AP Name                           Mac Address     Slot    Admin State    Oper State    Width    Txpwr           Channel                             Mode
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+AP-ALPHA                          0011.2233.4455  1       Enabled        Up            20       *3/8 (13 dBm)   (44)*                               Local
+
+show ap name AP-ALPHA auto-rf dot11 5ghz
+AP Name: AP-ALPHA
+Nearby APs
+NEIGH-1 00:11:22:33:44:66 36 -60
+NEIGH-2 00:11:22:33:44:77 40 -68
+Radar Information
+Current Channel: 100#
+Channel Width: 80
+Channel changes due to radar: 3
+Zero Wait DFS Capable: yes
+Zero Wait DFS Enabled: yes
+Load Information
+  Load Profile: Passed
+  Receive Utilization: 7%
+  Transmit Utilization: 11%
+  Channel Utilization: 23%
+
+show ap name AP-BRAVO auto-rf dot11 5ghz
+AP Name: AP-BRAVO
+Nearby APs
+NEIGH-3 00:11:22:33:44:88 149 -65
+Radar Information
+Current Channel: 44
+Channel Width: 40
+Channel changes due to radar: 0
+Zero Wait DFS Capable: no
+Zero Wait DFS Enabled: no
+Load Information
+  Load Profile: Passed
+  Receive Utilization: 1%
+  Transmit Utilization: 3%
+  Channel Utilization: 6%
+
+show wireless stats ap name AP-ALPHA traffic-distribution slot 1 latency access-category voice last-received
+AP Name: AP-ALPHA
+Slot ID: 1
+Access Category: Voice
+Time Period: Ending at 05/06/2026 09:35:37.506047
+Client Generation: Non-WiFi6
+Active Client Count: 1
+Average Latency (usec): 121347
+Good Tx Packets: 6
+Medium Tx Packets: 0
+High Tx Packets: 0
+Very High Tx Packets: 1
+
+show wireless stats ap name AP-BRAVO traffic-distribution slot 0 latency access-category voice last-received
+AP Name: AP-BRAVO
+Slot ID: 0
+Access Category: Voice
+Time Period: Ending at 05/06/2026 09:36:37.506047
+Client Generation        Non-WiFi6    WiFi6
+Active Client Count      16           0
+Average Latency (usec)   7197         0
+Good Tx Packets          788          0
+Medium Tx Packets        1            0
+High Tx Packets          0            0
+Very High Tx Packets     2            0
+
+show wireless stats ap name AP-CHARLIE traffic-distribution slot 1 latency access-category voice last-received
+Time Period: Ending at 05/06/2026 09:37:37.506047
+LATENCY STATISTICS by Access Category (AC) for Voice on Slot 1
+                       WiFi7/MLO           WiFi7/non-MLO       WiFi6               Non-WiFi6
+=======================================================================================================
+Active Client Count    0                   0                   1                   17
+Average Latency (usec) 0                   0                   3906                67587
+
+
+Latency Level      WiFi7/MLO           WiFi7/non-MLO       WiFi6               Non-WiFi6
+                   Tx Packets          Tx Packets          Tx Packets          Tx Packets
+===================================================================================================
+Good              0                    0                    3                    47
+Medium            0                    0                    0                    2
+High              0                    0                    0                    5
+Very high         0                    0                    0                    6

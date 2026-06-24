@@ -1,0 +1,15 @@
+[Unit]
+Description=Refresh wireless RF node exporter textfile metrics
+
+[Timer]
+# Start shortly after boot and then refresh often enough that AP voice latency
+# freshness rules have current textfile input.
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+# Run missed intervals after downtime so the textfile is refreshed on recovery.
+Persistent=true
+Unit=wireless-rf-textfile.service
+
+[Install]
+WantedBy=timers.target

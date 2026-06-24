@@ -1,0 +1,3 @@
+# Optional dependencies for the Streamlit RF/badge inspection apps.
+pandas>=2.0
+streamlit>=1.32

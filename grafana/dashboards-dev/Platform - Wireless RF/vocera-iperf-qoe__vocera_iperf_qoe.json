@@ -1,0 +1,766 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [
+    {
+      "title": "Vocera Badge 802.11r Impact",
+      "type": "dashboards",
+      "tags": [
+        "vocera",
+        "wireless"
+      ]
+    }
+  ],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "panels": [],
+      "title": "Current Probe Health",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "efbjrspdsbl6oa"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "id": 2,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "sum(vocera_iperf_up{device=~\"$device\",ssid=~\"$ssid\",direction=~\"$direction\"} and on(device,direction,target,target_port) (vocera_iperf_result_age_seconds{device=~\"$device\",ssid=~\"$ssid\",direction=~\"$direction\"} < 900)) or vector(0)",
+          "format": "time_series",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Fresh Series <15m",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "efbjrspdsbl6oa"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "max": 1,
+          "min": 0,
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "id": 3,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "max(vocera_iperf_loss_ratio{device=~\"$device\",ssid=~\"$ssid\",direction=~\"$direction\"})",
+          "format": "time_series",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Worst Packet Loss Last-Known",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "efbjrspdsbl6oa"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "id": 4,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "min(vocera_iperf_result_age_seconds{device=~\"$device\",ssid=~\"$ssid\",direction=~\"$direction\"})",
+          "format": "time_series",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Newest Result Age",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "efbjrspdsbl6oa"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "id": 5,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "count(vocera_iperf_up{device=~\"$device\",ssid=~\"$ssid\",direction=~\"$direction\"})",
+          "format": "time_series",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Last-Known Series",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "efbjrspdsbl6oa"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "id": 15,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "avg(avg_over_time(vocera_iperf_jitter_seconds{device=~\"$device\",ssid=~\"$ssid\",direction=\"client_to_client\"}[1h]))",
+          "format": "time_series",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Client To Client Avg UDP Jitter 1h Last-Known",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "efbjrspdsbl6oa"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "id": 16,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "avg(avg_over_time(vocera_iperf_raw_latency_seconds{device=~\"$device\",ssid=~\"$ssid\",direction=\"client_to_client\"}[1h]))",
+          "format": "time_series",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Client To Client Avg Raw Latency 1h Last-Known",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 11
+      },
+      "id": 6,
+      "panels": [],
+      "title": "QoE Over Time",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "efbjrspdsbl6oa"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "vocera_iperf_jitter_seconds{device=~\"$device\",ssid=~\"$ssid\",direction=~\"$direction\"}",
+          "format": "time_series",
+          "legendFormat": "{{device}} {{direction}} -> {{target_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "UDP Jitter Last-Known",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "efbjrspdsbl6oa"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "max": 1,
+          "min": 0,
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "vocera_iperf_loss_ratio{device=~\"$device\",ssid=~\"$ssid\",direction=~\"$direction\"}",
+          "format": "time_series",
+          "legendFormat": "{{device}} {{direction}} -> {{target_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Packet Loss Last-Known",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "id": 17,
+      "panels": [],
+      "title": "1h Averages Over Time",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "efbjrspdsbl6oa"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      },
+      "id": 18,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "avg_over_time(vocera_iperf_raw_latency_seconds{device=~\"$device\",ssid=~\"$ssid\",direction=\"client_to_client\"}[1h])",
+          "format": "time_series",
+          "legendFormat": "{{device}} raw latency 1h avg -> {{target_name}}",
+          "refId": "A"
+        },
+        {
+          "expr": "avg_over_time(vocera_iperf_jitter_seconds{device=~\"$device\",ssid=~\"$ssid\",direction=\"client_to_client\"}[1h])",
+          "format": "time_series",
+          "legendFormat": "{{device}} jitter 1h avg -> {{target_name}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Client To Client 1h Averages Last-Known",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "efbjrspdsbl6oa"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      },
+      "id": 19,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "avg_over_time(vocera_iperf_raw_latency_seconds{device=~\"$device\",ssid=~\"$ssid\",direction=\"client_to_server\"}[1h])",
+          "format": "time_series",
+          "legendFormat": "{{device}} raw latency 1h avg -> {{target_name}}",
+          "refId": "A"
+        },
+        {
+          "expr": "avg_over_time(vocera_iperf_jitter_seconds{device=~\"$device\",ssid=~\"$ssid\",direction=\"client_to_server\"}[1h])",
+          "format": "time_series",
+          "legendFormat": "{{device}} jitter 1h avg -> {{target_name}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Client To Server 1h Averages Last-Known",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "id": 11,
+      "panels": [],
+      "title": "Raw Latency By Traffic Path",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "efbjrspdsbl6oa"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 30
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "vocera_iperf_raw_latency_seconds{device=~\"$device\",ssid=~\"$ssid\",direction=\"client_to_client\"}",
+          "format": "time_series",
+          "legendFormat": "{{device}} raw latency -> {{target_name}}",
+          "refId": "A"
+        },
+        {
+          "expr": "vocera_iperf_jitter_seconds{device=~\"$device\",ssid=~\"$ssid\",direction=\"client_to_client\"}",
+          "format": "time_series",
+          "legendFormat": "{{device}} jitter -> {{target_name}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Client To Client Last-Known",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "efbjrspdsbl6oa"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 30
+      },
+      "id": 13,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "vocera_iperf_raw_latency_seconds{device=~\"$device\",ssid=~\"$ssid\",direction=\"client_to_server\"}",
+          "format": "time_series",
+          "legendFormat": "{{device}} raw latency -> {{target_name}}",
+          "refId": "A"
+        },
+        {
+          "expr": "vocera_iperf_jitter_seconds{device=~\"$device\",ssid=~\"$ssid\",direction=\"client_to_server\"}",
+          "format": "time_series",
+          "legendFormat": "{{device}} jitter -> {{target_name}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Client To Server Last-Known",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "efbjrspdsbl6oa"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 30
+      },
+      "id": 14,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "vocera_iperf_raw_latency_seconds{device=~\"$device\",ssid=~\"$ssid\",direction=\"server_to_client\"}",
+          "format": "time_series",
+          "legendFormat": "{{device}} raw latency -> {{target_name}}",
+          "refId": "A"
+        },
+        {
+          "expr": "vocera_iperf_jitter_seconds{device=~\"$device\",ssid=~\"$ssid\",direction=\"server_to_client\"}",
+          "format": "time_series",
+          "legendFormat": "{{device}} jitter -> {{target_name}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Server To Client Last-Known",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "efbjrspdsbl6oa"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 38
+      },
+      "id": 10,
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "expr": "vocera_iperf_up{device=~\"$device\",ssid=~\"$ssid\",direction=~\"$direction\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{device}} {{direction}} -> {{target_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Latest Probe Status Last-Known",
+      "type": "table"
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "vocera",
+    "iperf",
+    "wireless"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "efbjrspdsbl6oa"
+        },
+        "definition": "label_values(vocera_iperf_up, device)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Device",
+        "multi": true,
+        "name": "device",
+        "options": [],
+        "query": {
+          "query": "label_values(vocera_iperf_up, device)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "efbjrspdsbl6oa"
+        },
+        "definition": "label_values(vocera_iperf_up, ssid)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "SSID",
+        "multi": true,
+        "name": "ssid",
+        "options": [],
+        "query": {
+          "query": "label_values(vocera_iperf_up, ssid)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "efbjrspdsbl6oa"
+        },
+        "definition": "label_values(vocera_iperf_up, direction)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Direction",
+        "multi": true,
+        "name": "direction",
+        "options": [],
+        "query": {
+          "query": "label_values(vocera_iperf_up, direction)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "Vocera Iperf QoE",
+  "uid": "vocera_iperf_qoe",
+  "version": 1,
+  "weekStart": ""
+}

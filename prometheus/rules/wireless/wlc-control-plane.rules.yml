@@ -1,0 +1,72 @@
+# Recording rules for Catalyst 9800 WLC control-plane telemetry.
+# Source MDT subscriptions:
+#   280 - process CPU one-minute utilization
+#   290 - platform software control-process CPU/memory/load status
+groups:
+  - name: wireless-wlc-control-plane
+    interval: 30s
+    rules:
+      - record: wireless_wlc_cpu_one_minute_pct
+        expr: |
+          max by (source, subscription) (
+            Cisco_IOS_XE_process_cpu_oper:cpu_usage_cpu_utilization_one_minute
+          )
+
+      - record: wireless_wlc_control_process_cpu_average_pct
+        expr: |
+          max by (
+            source, subscription, chassis, chassis_state,
+            high_availability_state, slot, bay, fru, control_process_status
+          ) (
+            Cisco_IOS_XE_platform_software_oper:cisco_platform_software_control_processes_control_process_per_core_stats_per_core_stat_cpu_average
+          )
+
+      - record: wireless_wlc_control_process_memory_used_pct
+        expr: |
+          max by (
+            source, subscription, chassis, chassis_state,
+            high_availability_state, slot, bay, fru, control_process_status,
+            memory_stats_memory_status
+          ) (
+            Cisco_IOS_XE_platform_software_oper:cisco_platform_software_control_processes_control_process_memory_stats_used_percent
+          )
+
+      - record: wireless_wlc_control_process_load_average
+        expr: |
+          max by (
+            source, subscription, chassis, chassis_state,
+            high_availability_state, slot, bay, fru, control_process_status,
+            load_average_stats_load_average_status,
+            load_avg_minutes_load_avg_minute_status_condition,
+            load_avg_minutes_load_avg_minute_status_threshold_status
+          ) (
+            Cisco_IOS_XE_platform_software_oper:cisco_platform_software_control_processes_control_process_load_avg_minutes_load_avg_minute_average
+          )
+
+      - record: wireless_wlc_control_process_health
+        expr: |
+          min by (
+            source, subscription, chassis, chassis_state,
+            high_availability_state, slot, bay, fru, control_process_status,
+            memory_stats_memory_status,
+            load_average_stats_load_average_status,
+            load_avg_minutes_load_avg_minute_status_condition,
+            load_avg_minutes_load_avg_minute_status_threshold_status
+          ) (
+            (
+              Cisco_IOS_XE_platform_software_oper:cisco_platform_software_control_processes_control_process_memory_stats_used_percent
+              >= bool 0
+            )
+            * on (
+              source, subscription, chassis, chassis_state,
+              high_availability_state, slot, bay, fru, control_process_status
+            ) group_left(
+              load_average_stats_load_average_status,
+              load_avg_minutes_load_avg_minute_status_condition,
+              load_avg_minutes_load_avg_minute_status_threshold_status
+            )
+            (
+              Cisco_IOS_XE_platform_software_oper:cisco_platform_software_control_processes_control_process_load_avg_minutes_load_avg_minute_average
+              >= bool 0
+            )
+          )

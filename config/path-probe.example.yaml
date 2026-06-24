@@ -1,0 +1,23 @@
+# Example path probe config. Keep real IPs and hostnames in an untracked copy,
+# for example config/path-probe.yaml or /etc/default/wireless-path-probe.
+
+jobs:
+  - name: srhc-vocera-paths
+    defaults:
+      method: system_ping
+      count: 5
+      timeout_seconds: 2
+      interval_seconds: 1.0
+    targets:
+      # Collector-originated probes measure from this VM, not from the WLC.
+      - segment: collector_to_server
+        source: collectors01
+        target: vocera-server
+        target_type: server
+        address: 192.0.2.10
+
+      - segment: collector_to_badge
+        source: collectors01
+        target: example-badge
+        target_type: badge
+        address: 192.0.2.20

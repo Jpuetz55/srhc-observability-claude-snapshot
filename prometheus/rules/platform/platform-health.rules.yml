@@ -1,0 +1,152 @@
+# Platform health rollups used by the Grafana operations dashboard. These rules
+# smooth over raw Prometheus, Kubernetes, and Mimir/Cortex metric names so panels
+# can stay stable while component exporters change underneath.
+groups:
+  - name: platform-health
+    interval: 30s
+    rules:
+      # Overall scrape and alert health.
+      - record: platform_target_up_ratio
+        expr: avg(up)
+
+      - record: platform_alerts_firing_total
+        expr: sum(ALERTS{alertstate="firing"}) or vector(0)
+
+      # Kubernetes readiness rollups are namespace-scoped for dashboard tables.
+      - record: platform_kube_pod_ready_total
+        expr: sum by (namespace) (kube_pod_status_ready{condition="true"})
+
+      - record: platform_kube_pod_ready_ratio
+        expr: |
+          sum by (namespace) (kube_pod_status_ready{condition="true"})
+          /
+          clamp_min(count by (namespace) (kube_pod_status_ready{condition="true"}), 1)
+
+      - record: platform_kube_pod_not_ready_total
+        expr: |
+          count by (namespace) (kube_pod_status_ready{condition="true"})
+          -
+          sum by (namespace) (kube_pod_status_ready{condition="true"})
+
+      - record: platform_kube_pod_restarts_rate_5m
+        expr: |
+          sum by (namespace) (
+            rate(kube_pod_container_status_restarts_total[5m])
+          )
+
+      - record: platform_kube_pod_waiting_total
+        expr: |
+          sum by (namespace, reason) (
+            kube_pod_container_status_waiting_reason
+          )
+
+      - record: platform_kube_node_ready_ratio
+        expr: |
+          sum(kube_node_status_condition{condition="Ready",status="true"})
+          /
+          clamp_min(count(kube_node_status_condition{condition="Ready",status="true"}), 1)
+
+      - record: platform_kube_node_not_ready_total
+        expr: |
+          count(kube_node_status_condition{condition="Ready",status="true"})
+          -
+          sum(kube_node_status_condition{condition="Ready",status="true"})
+
+      - record: platform_deployment_available_ratio
+        expr: |
+          sum by (namespace, deployment) (
+            kube_deployment_status_replicas_available
+          )
+          /
+          clamp_min(
+            sum by (namespace, deployment) (
+              kube_deployment_spec_replicas
+            ),
+            1
+          )
+
+      - record: platform_deployment_unavailable_replicas
+        expr: |
+          sum by (namespace, deployment) (
+            kube_deployment_status_replicas_unavailable
+          )
+
+      - record: platform_deployment_available_replicas
+        expr: |
+          sum by (namespace, deployment) (
+            kube_deployment_status_replicas_available
+          )
+
+      # Remote-write rules expose queue pressure, failures, retries, and lag as
+      # single platform metrics independent of the local Prometheus target names.
+      - record: platform_remote_write_pending_samples
+        expr: |
+          sum(prometheus_remote_storage_pending_samples)
+
+      - record: platform_remote_write_failed_samples_rate_5m
+        expr: |
+          sum(rate(prometheus_remote_storage_failed_samples_total[5m]))
+
+      - record: platform_remote_write_retried_samples_rate_5m
+        expr: |
+          sum(rate(prometheus_remote_storage_retried_samples_total[5m]))
+
+      - record: platform_remote_write_lag_seconds
+        expr: |
+          (
+            time() - max(prometheus_remote_storage_highest_timestamp_in_seconds)
+          )
+          or
+          (
+            time() - max(prometheus_remote_storage_queue_highest_sent_timestamp_seconds)
+          )
+
+      # Mimir still exposes some metrics under the historical cortex_* prefix in
+      # several versions, so these rules keep both spellings for compatibility.
+      - record: platform_mimir_request_rate_5m
+        expr: |
+          sum by (job) (
+            rate(cortex_request_duration_seconds_count[5m])
+          )
+          or
+          sum by (job) (
+            rate(mimir_request_duration_seconds_count[5m])
+          )
+
+      - record: platform_mimir_request_latency_p95_seconds
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (job, le) (
+              rate(cortex_request_duration_seconds_bucket[5m])
+            )
+          )
+          or
+          histogram_quantile(
+            0.95,
+            sum by (job, le) (
+              rate(mimir_request_duration_seconds_bucket[5m])
+            )
+          )
+
+      - record: platform_mimir_ingested_samples_rate_5m
+        expr: |
+          sum(rate(cortex_distributor_received_samples_total[5m]))
+          or
+          sum(rate(mimir_distributor_received_samples_total[5m]))
+
+      - record: platform_mimir_discarded_samples_rate_5m
+        expr: |
+          sum(rate(cortex_distributor_discarded_samples_total[5m]))
+          or
+          sum(rate(mimir_distributor_discarded_samples_total[5m]))
+
+      - record: platform_mimir_active_series
+        expr: |
+          sum(cortex_ingester_memory_series)
+          or
+          sum(mimir_ingester_memory_series)
+          or
+          sum(cortex_ingester_active_series)
+          or
+          sum(mimir_ingester_active_series)

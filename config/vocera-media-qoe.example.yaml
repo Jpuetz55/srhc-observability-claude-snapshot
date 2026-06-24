@@ -1,0 +1,58 @@
+# Example offline Vocera media QoE analyzer config. Keep site-specific values in
+# an untracked copy, for example config/vocera-media-qoe.yaml.
+site: srhc
+capture_point: wlc_epc
+
+# Expected DSCP for voice media. 46 is EF.
+expected_dscp: 46
+
+servers:
+  - name: vocera-server
+    ip: 192.0.2.10
+
+badge_subnets:
+  - 192.0.2.0/24
+
+# Control/test comparison labels. IP matching is preferred; MAC matching is used
+# as a fallback when the pcap filename or folder contains the badge MAC.
+devices:
+  - name: Control Device
+    role: control
+    config: production
+    ip: 192.0.2.20
+    mac: 00:09:ef:00:00:01
+  - name: Test Device
+    role: test
+    config: test
+    ip: 192.0.2.21
+    mac: 00:09:ef:00:00:02
+
+# Leave empty during discovery. After confirming media ports, use tight ranges.
+media_ports:
+  - "16384-32767"
+
+# RTP clock rates by payload type. The default keeps dynamic/proprietary
+# RTP-like payloads on the common narrowband voice 8 kHz clock until verified.
+payload_clock_rates:
+  default: 8000
+  0: 8000
+  8: 8000
+  9: 8000
+  18: 8000
+
+rtp_plausibility:
+  strict: true
+  require_known_clock_rate: false
+  min_packets: 20
+  min_duration_seconds: 0.25
+  max_interarrival_ms: 500
+  max_jitter_ms: 500
+  min_sequence_progression_ratio: 0.80
+  min_timestamp_progression_ratio: 0.80
+  max_timestamp_wallclock_error_ms: 250
+  min_packetization_ms: 5
+  max_packetization_ms: 100
+  max_loss_ratio: 0.50
+  max_duplicate_ratio: 0.50
+  max_out_of_order_ratio: 0.50
+  debug_packet_limit: 20

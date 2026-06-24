@@ -1,0 +1,26 @@
+[Unit]
+Description=Vocera Media QoE PostgreSQL datasource
+Documentation=file:/opt/grafana-mimir-observability/docs/wireless/vocera-media-dnac-icap-runbook.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment=VOCERA_MEDIA_QOE_POSTGRES_CONTAINER_NAME=vocera-media-qoe-postgres
+Environment=VOCERA_MEDIA_QOE_POSTGRES_IMAGE=docker.io/postgres:16.4-alpine
+Environment=VOCERA_MEDIA_QOE_POSTGRES_PORT=15434
+Environment=VOCERA_MEDIA_QOE_POSTGRES_DB=vocera_media_qoe
+Environment=VOCERA_MEDIA_QOE_POSTGRES_USER=vocera_media_qoe
+Environment=VOCERA_MEDIA_QOE_POSTGRES_DATA_DIR=/var/lib/vocera-media-qoe/postgres
+Environment=VOCERA_MEDIA_QOE_POSTGRES_INIT_DIR=/etc/vocera-media-qoe-postgres/init
+EnvironmentFile=-/etc/default/vocera-media-qoe-postgres
+EnvironmentFile=-/etc/grafana-mimir-observability/secrets/vocera-media-qoe-postgres.env
+ExecStartPre=-/usr/bin/podman rm -f ${VOCERA_MEDIA_QOE_POSTGRES_CONTAINER_NAME}
+ExecStart=/usr/bin/podman run --name ${VOCERA_MEDIA_QOE_POSTGRES_CONTAINER_NAME} --pull=missing -p 127.0.0.1:${VOCERA_MEDIA_QOE_POSTGRES_PORT}:5432 -e POSTGRES_DB=${VOCERA_MEDIA_QOE_POSTGRES_DB} -e POSTGRES_USER=${VOCERA_MEDIA_QOE_POSTGRES_USER} -e POSTGRES_PASSWORD=${VOCERA_MEDIA_QOE_POSTGRES_PASSWORD} -v ${VOCERA_MEDIA_QOE_POSTGRES_DATA_DIR}:/var/lib/postgresql/data:Z -v ${VOCERA_MEDIA_QOE_POSTGRES_INIT_DIR}:/docker-entrypoint-initdb.d:ro,Z ${VOCERA_MEDIA_QOE_POSTGRES_IMAGE}
+ExecStop=/usr/bin/podman stop -t 10 ${VOCERA_MEDIA_QOE_POSTGRES_CONTAINER_NAME}
+ExecStopPost=-/usr/bin/podman rm -f ${VOCERA_MEDIA_QOE_POSTGRES_CONTAINER_NAME}
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=300s
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# Pre-commit hook: reject anything that looks like a plaintext secret in
+# the staged diff. Designed to catch *.sops.yaml that wasn't actually
+# encrypted, accidentally re-introduced `_dev_change_me` defaults, and
+# the most common cred patterns in scripts/yaml/python.
+#
+# Install once:
+#   bash scripts/install_githooks.sh
+#
+# Bypass intentionally (e.g. for fixtures with placeholder values):
+#   git commit --no-verify
+set -euo pipefail
+
+# Skip silently when there's no staged content (e.g. amend with no changes).
+mapfile -t staged < <(git diff --cached --name-only --diff-filter=ACM)
+if [[ ${#staged[@]} -eq 0 ]]; then
+  exit 0
+fi
+
+fail=0
+report() {
+  if [[ "$fail" -eq 0 ]]; then
+    echo "pre-commit: blocked. The following files appear to contain plaintext secrets:" >&2
+  fi
+  fail=1
+  echo "  - $1" >&2
+}
+
+# Returns 0 (true) when the path is documentation / example / hook source
+# that legitimately needs to reference secret-looking strings.
+is_exempt() {
+  case "$1" in
+    secrets/README.md|secrets/*.example) return 0 ;;
+    scripts/githooks/*)                  return 0 ;;
+    .sops.yaml)                          return 0 ;;
+  esac
+  return 1
+}
+
+for file in "${staged[@]}"; do
+  [[ -f "$file" ]] || continue
+
+  # 1) Anything under secrets/ MUST be either *.sops.yaml (encrypted by sops),
+  #    *.example, or README.md. A plain *.yaml/.yml/.env under secrets/ is a
+  #    missed encryption.
+  case "$file" in
+    secrets/*.sops.yaml|secrets/*.sops.yml) ;;
+    secrets/README.md|secrets/*.example) ;;
+    secrets/*)
+      report "$file: file under secrets/ that is not *.sops.yaml; encrypt with 'sops --encrypt --in-place' or rename to *.example"
+      continue
+      ;;
+  esac
+
+  # 2) For files in secrets/ named *.sops.yaml, confirm sops-encryption
+  #    happened (presence of the `sops:` metadata block at the bottom).
+  #    Note: this check is scoped to secrets/* so it does NOT apply to the
+  #    repo-level `.sops.yaml` config file, which has no encrypted content.
+  case "$file" in
+    secrets/*.sops.yaml|secrets/*.sops.yml)
+      if ! grep -qE '^sops:' "$file"; then
+        report "$file: claims to be sops-encrypted but has no sops: metadata block"
+      fi
+      continue
+      ;;
+  esac
+
+  # Everything below is content scanning; skip for exempt files.
+  if is_exempt "$file"; then
+    continue
+  fi
+
+  # 3) Known dev-default strings the repo used to ship.
+  if grep -qE '(topology|vocera_media_qoe|vocera_rf_validation)_dev_change_me' "$file"; then
+    report "$file: contains *_dev_change_me string; move to secrets/postgres.env.sops.yaml"
+    continue
+  fi
+
+  # 4) Generic password/secret/api_key/token assignments with a non-${...}
+  #    value. Skip well-known placeholder patterns and shell-expansion forms.
+  matches=$(grep -nE '(^|[^A-Za-z0-9_])(password|secret|api[_-]?key|token)[[:space:]]*[:=][[:space:]]*[^[:space:]$#"'\''{][^[:space:]]+' "$file" 2>/dev/null \
+            | grep -vE 'REPLACE_|PLACEHOLDER|CHANGEME|changeme|<.*>|example\.com|\.example|test_|fixture' \
+            | grep -vE '"\$|\$\{|password=\s*$|password:\s*$|password:\s*\$\{' \
+            | head -3 || true)
+  if [[ -n "$matches" ]]; then
+    report "$file"
+    while IFS= read -r m; do
+      echo "      $m" >&2
+    done <<<"$matches"
+  fi
+done
+
+if [[ "$fail" -ne 0 ]]; then
+  echo >&2
+  echo "Bypass with 'git commit --no-verify' if you're certain (and please double-check)." >&2
+  exit 1
+fi
+exit 0

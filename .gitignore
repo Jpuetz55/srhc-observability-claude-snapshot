@@ -1,0 +1,100 @@
+# ---- Local / secrets (do not commit) ----
+.tmp
+.env
+.env.*
+*.key
+*.pem
+*.pfx
+*.p12
+*.crt
+*.csr
+*.jks
+**/*secrets*
+**/*secret*
+**/*password*
+**/*passwd*
+**/*token*
+**/*apikey*
+**/*api_key*
+**/*private*
+!docs/private-git-workflow.md
+!deploy/k8s/base/alloy/secret-mimir-remote-write.example.yaml
+runtime/**/grafana.ini.local
+runtime/**/ldap.toml
+runtime/**/ldap.conf
+runtime/**/ldap.yaml
+runtime/**/ldap.yml
+runtime/**/ldap.yml
+runtime/**/grafana.ini
+config/path-probe.yaml
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ---- Python local tooling ----
+.venv/
+__pycache__/
+*.pyc
+*.patch
+
+# ---- Data that should never be committed ----
+**/*.db
+**/wal/
+**/chunks/
+**/index/
+*.log
+logs/
+data/
+**/data/
+dev-data/
+dev-data-b/
+dev-data-*/
+dev-data-u*/
+grafana/.dashboards-dev.backup.*
+grafana/.dashboards-dev.staging.*
+
+# Local tool shims/binaries (per-developer)
+.tools/bin/
+
+# ---- Local Ansible inventory/host overrides ----
+deploy/vm/ansible/inventory/hosts.ini
+deploy/vm/ansible/host_vars/
+deploy/vm/ansible/group_vars/all.local.yml
+deploy/vm/ansible/group_vars/all.secrets.yml
+
+# ---- secrets/ exceptions ----
+# The broad **/*secrets* rule above blocks the secrets/ tree by default;
+# re-include sops-encrypted files, the bootstrap template, and the README,
+# but keep blocking any plaintext / decrypted copies under that dir.
+!secrets/
+!secrets/*.sops.yaml
+!secrets/*.sops.yml
+!secrets/*.example
+!secrets/README.md
+secrets/*.plain*
+secrets/*.decrypted*
+secrets/*.env
+
+# ---- secrets-management infrastructure (NOT secret material) ----
+# These files happen to have "secret" in their names but are tooling.
+!.sops.yaml
+!scripts/install_secrets.py
+!scripts/install_secrets.sh
+!scripts/sync_postgres_passwords_from_secrets.sh
+!scripts/githooks/
+!scripts/githooks/*
+!systemd-overrides/grafana-server.service.d/secrets.conf
+
+# ---- Study web frontend/build outputs ----
+.venv-study-web/
+web/study-ui/node_modules/
+web/study-ui/dist/
+web/study-ui/.vite/
+
+# Study web frontend build artifacts
+web/study-ui/dist/
+tools/study_web/static/*
+!tools/study_web/static/.gitkeep

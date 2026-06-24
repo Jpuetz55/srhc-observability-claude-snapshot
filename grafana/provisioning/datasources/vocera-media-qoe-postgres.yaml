@@ -1,0 +1,28 @@
+# Provisioned datasource consumed by the Vocera Media PCAP QoE dashboard for
+# capture-time history. Prometheus still carries exporter health snapshots.
+apiVersion: 1
+
+deleteDatasources:
+  - name: Vocera Media QoE PostgreSQL
+    orgId: 1
+
+datasources:
+  - name: Vocera Media QoE PostgreSQL
+    uid: VOCERA_MEDIA_QOE_DS
+    type: postgres
+    orgId: 1
+    access: proxy
+    url: 127.0.0.1:15434
+    user: vocera_media_qoe
+    isDefault: false
+    version: 1
+    editable: false
+    jsonData:
+      database: vocera_media_qoe
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+    secureJsonData:
+      # See systemd-overrides/grafana-server.service.d/secrets.conf for how
+      # this env var is loaded; source-of-truth is secrets/postgres.env.sops.yaml.
+      password: ${VOCERA_MEDIA_QOE_POSTGRES_PASSWORD}

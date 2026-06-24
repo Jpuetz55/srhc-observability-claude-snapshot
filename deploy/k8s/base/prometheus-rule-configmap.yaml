@@ -1,0 +1,22 @@
+# Minimal Prometheus rule bundle for Kubernetes deployments. The VM deployment
+# uses the fuller rule files under prometheus/rules.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules
+  namespace: observability
+data:
+  platform-health.rules.yml: |
+    # Platform rollups intentionally use simple expressions here so the base
+    # manifest can run in clusters with only common kube/prometheus metrics.
+    groups:
+      - name: platform-health
+        rules:
+          - record: platform:prometheus_remote_write_failure_rate5m
+            expr: rate(prometheus_remote_storage_samples_failed_total[5m])
+          - record: platform:k8s_pod_running_ratio
+            expr: sum(kube_pod_status_phase{phase="Running"}) / clamp_min(sum(kube_pod_status_phase), 1)
+          - record: platform:mimir_ingest_rate5m
+            expr: rate(mimir_distributor_received_samples_total[5m])
+          - record: platform:node_ready_ratio
+            expr: sum(kube_node_status_condition{condition="Ready",status="true"}) / clamp_min(sum(kube_node_status_condition{condition="Ready"}), 1)

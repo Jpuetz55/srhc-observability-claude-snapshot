@@ -1,0 +1,11 @@
+# Base Kubernetes manifests for observability deployments. Environment overlays
+# only add labels and select this shared resource set.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: observability
+resources:
+  # Keep namespace, Prometheus rules, and dashboard ConfigMaps grouped so an
+  # overlay can apply the same Git-managed observability surface anywhere.
+  - namespace.yaml
+  - prometheus-rule-configmap.yaml
+  - grafana-dashboard-configmap.yaml

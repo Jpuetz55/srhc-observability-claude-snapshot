@@ -1,0 +1,6 @@
+2026-05-21 09:47:05 brcmfmac: roam_reason = BRCMF_E_REASON_LOW_RSSI[1]
+2026-05-21 09:47:05 brcmfmac: Found 1 total APs and 1 roam candidate APs
+2026-05-21 09:47:05 brcmfmac: [0*] [f0:d8:05:1f:74:96] [Channel: 140] [RSSI = -46] [CU = 3%] [Score = 100]
+2026-05-21 09:47:08 brcmfmac: roam_reason = BRCMF_E_REASON_BETTER_AP[5]
+2026-05-21 09:47:08 brcmfmac: Found 1 total APs and 1 roam candidate APs
+2026-05-21 09:47:08 brcmfmac: [0*] [f0:d8:05:1f:75:96] [Channel: 149] [RSSI = -52] [CU = 9%] [Score = 92]

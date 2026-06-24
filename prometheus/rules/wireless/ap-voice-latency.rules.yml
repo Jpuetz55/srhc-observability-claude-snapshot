@@ -1,0 +1,352 @@
+# Recording rules for AP-to-client voice access-category latency parsed from
+# WLC traffic-distribution CLI output. Cisco defines this latency as AP-to-client
+# successful transmission time by access category. These metrics are RF/airtime
+# context, not badge-to-badge or badge-to-server media latency/jitter.
+groups:
+  - name: wireless-ap-voice-latency
+    interval: 30s
+    rules:
+      # Keep only positive voice AC samples with active clients and a recent
+      # sample window so stale AP snapshots do not hold old latency values open.
+      - record: wireless_ap_voice_latency_avg_us
+        expr: |
+          max by (
+            wlc,
+            ap_name,
+            site_tag,
+            policy_tag,
+            rf_tag,
+            slot_id,
+            band,
+            client_generation
+          ) (
+            wireless_ap_ac_latency_avg_us_cli{access_category="voice"} > 0
+            and on (
+              wlc,
+              ap_name,
+              site_tag,
+              policy_tag,
+              rf_tag,
+              slot_id,
+              band,
+              access_category,
+              client_generation
+            )
+            wireless_ap_ac_latency_active_clients_cli{access_category="voice"} > 0
+            and on (
+              wlc,
+              ap_name,
+              site_tag,
+              policy_tag,
+              rf_tag,
+              slot_id,
+              band,
+              access_category,
+              client_generation
+            )
+            (
+              time() - wireless_ap_ac_latency_sample_end_timestamp_seconds{access_category="voice"} < 4500
+            )
+          )
+
+      - record: wireless_ap_voice_latency_avg_ms
+        expr: |
+          wireless_ap_voice_latency_avg_us / 1000
+
+      # Active client counts use the same freshness and positive-latency gates
+      # as latency itself so counts and latency are safe to join in dashboards.
+      - record: wireless_ap_voice_latency_active_clients
+        expr: |
+          max by (
+            wlc,
+            ap_name,
+            site_tag,
+            policy_tag,
+            rf_tag,
+            slot_id,
+            band,
+            client_generation
+          ) (
+            wireless_ap_ac_latency_active_clients_cli{access_category="voice"} > 0
+            and on (
+              wlc,
+              ap_name,
+              site_tag,
+              policy_tag,
+              rf_tag,
+              slot_id,
+              band,
+              access_category,
+              client_generation
+            )
+            wireless_ap_ac_latency_avg_us_cli{access_category="voice"} > 0
+            and on (
+              wlc,
+              ap_name,
+              site_tag,
+              policy_tag,
+              rf_tag,
+              slot_id,
+              band,
+              access_category,
+              client_generation
+            )
+            (
+              time() - wireless_ap_ac_latency_sample_end_timestamp_seconds{access_category="voice"} < 4500
+            )
+          )
+
+      - record: wireless_ap_voice_latency_fresh_sample
+        expr: |
+          (time() - wireless_ap_ac_latency_sample_end_timestamp_seconds{access_category="voice"}) < 4500
+
+      - record: wireless_ap_voice_latency_avg_ms_fresh
+        expr: |
+          wireless_ap_voice_latency_avg_ms
+
+      # Site-level p95 is across AP/radio/client-generation samples, not a
+      # Prometheus histogram p95 and not a packet-weighted latency estimate.
+      - record: wireless_ap_voice_latency_p95_ms_by_site
+        expr: |
+          quantile by (wlc, site_tag, band) (
+            0.95,
+            wireless_ap_voice_latency_avg_ms
+          )
+
+      # Packet counts are retained per AP/radio/client-generation so the mean
+      # below can weight busy APs more heavily than lightly sampled outliers.
+      - record: wireless_ap_voice_latency_packets
+        expr: |
+          sum by (
+            wlc,
+            ap_name,
+            site_tag,
+            policy_tag,
+            rf_tag,
+            slot_id,
+            band,
+            client_generation
+          ) (
+            wireless_ap_ac_latency_packets_cli{access_category="voice"} > 0
+          )
+          and on (
+            wlc,
+            ap_name,
+            site_tag,
+            policy_tag,
+            rf_tag,
+            slot_id,
+            band,
+            client_generation
+          )
+          wireless_ap_voice_latency_avg_ms
+
+      - record: wireless_ap_voice_latency_packets_fresh
+        expr: |
+          wireless_ap_voice_latency_packets
+
+      # Packet-weighted mean is the best single current stat for Cisco AP voice
+      # AC transmission latency because it accounts for how many voice packets
+      # each AP saw. It is not an end-to-end media latency calculation.
+      - record: wireless_ap_voice_latency_packet_weighted_mean_ms_by_site
+        expr: |
+          sum by (wlc, site_tag, band) (
+            wireless_ap_voice_latency_avg_ms
+            * on (
+              wlc,
+              ap_name,
+              site_tag,
+              policy_tag,
+              rf_tag,
+              slot_id,
+              band,
+              client_generation
+            )
+            wireless_ap_voice_latency_packets
+          )
+          /
+          sum by (wlc, site_tag, band) (
+            wireless_ap_voice_latency_packets
+          )
+
+      - record: wireless_ap_voice_latency_packet_weighted_mean_ms_by_ap
+        expr: |
+          sum by (wlc, ap_name, site_tag, band) (
+            wireless_ap_voice_latency_avg_ms
+            * on (
+              wlc,
+              ap_name,
+              site_tag,
+              policy_tag,
+              rf_tag,
+              slot_id,
+              band,
+              client_generation
+            )
+            wireless_ap_voice_latency_packets
+          )
+          /
+          sum by (wlc, ap_name, site_tag, band) (
+            wireless_ap_voice_latency_packets
+          )
+
+      - record: wireless_ap_voice_latency_packet_weighted_mean_ms_median_by_site
+        expr: |
+          quantile by (wlc, site_tag, band) (
+            0.5,
+            wireless_ap_voice_latency_packet_weighted_mean_ms_by_ap
+          )
+
+      - record: wireless_ap_voice_latency_packet_weighted_mean_ms_p05_by_site
+        expr: |
+          quantile by (wlc, site_tag, band) (
+            0.05,
+            wireless_ap_voice_latency_packet_weighted_mean_ms_by_ap
+          )
+
+      - record: wireless_ap_voice_latency_packet_weighted_mean_ms_p95_by_site
+        expr: |
+          quantile by (wlc, site_tag, band) (
+            0.95,
+            wireless_ap_voice_latency_packet_weighted_mean_ms_by_ap
+          )
+
+      - record: wireless_ap_voice_latency_ranked_ms
+        expr: |
+          max by (
+            wlc,
+            ap_name,
+            site_tag,
+            policy_tag,
+            rf_tag,
+            slot_id,
+            band,
+            client_generation
+          ) (
+            wireless_ap_voice_latency_avg_ms
+          )
+
+      # Sample counts let dashboards show whether a site aggregate is based on
+      # enough fresh AP observations or mostly stale/noisy data.
+      - record: wireless_ap_voice_latency_sample_count_by_site
+        expr: |
+          count by (wlc, site_tag, band) (
+            max by (
+              wlc,
+              ap_name,
+              site_tag,
+              policy_tag,
+              rf_tag,
+              slot_id,
+              band,
+              client_generation
+            ) (
+              wireless_ap_ac_latency_avg_us_cli{access_category="voice"} > 0
+              and on (
+                wlc,
+                ap_name,
+                site_tag,
+                policy_tag,
+                rf_tag,
+                slot_id,
+                band,
+                access_category,
+                client_generation
+              )
+              wireless_ap_ac_latency_active_clients_cli{access_category="voice"} > 0
+            )
+          )
+
+      - record: wireless_ap_voice_latency_fresh_sample_count_by_site
+        expr: |
+          count by (wlc, site_tag, band) (
+            wireless_ap_voice_latency_avg_ms
+          )
+
+      - record: wireless_ap_voice_latency_stale_sample_count_by_site
+        expr: |
+          count by (wlc, site_tag, band) (
+            max by (
+              wlc,
+              ap_name,
+              site_tag,
+              policy_tag,
+              rf_tag,
+              slot_id,
+              band,
+              client_generation
+            ) (
+              (
+                wireless_ap_ac_latency_avg_us_cli{access_category="voice"} > 0
+                and on (
+                  wlc,
+                  ap_name,
+                  site_tag,
+                  policy_tag,
+                  rf_tag,
+                  slot_id,
+                  band,
+                  access_category,
+                  client_generation
+                )
+                wireless_ap_ac_latency_active_clients_cli{access_category="voice"} > 0
+              )
+              unless on (
+                wlc,
+                ap_name,
+                site_tag,
+                policy_tag,
+                rf_tag,
+                slot_id,
+                band,
+                access_category,
+                client_generation
+              )
+              (
+                time() - wireless_ap_ac_latency_sample_end_timestamp_seconds{access_category="voice"} < 4500
+              )
+            )
+          )
+
+      # Aggregate trend series for the dashboard. The CI rules intentionally
+      # keep site/band labels only so the main chart does not become an AP-level
+      # spaghetti plot.
+      - record: wireless_ap_voice_latency_mean_ms_by_site
+        expr: |
+          avg by (wlc, site_tag, band) (
+            wireless_ap_voice_latency_avg_ms
+          )
+
+      - record: wireless_ap_voice_latency_stddev_ms_by_site
+        expr: |
+          stddev by (wlc, site_tag, band) (
+            wireless_ap_voice_latency_avg_ms
+          )
+
+      - record: wireless_ap_voice_latency_sem_ms_by_site
+        expr: |
+          wireless_ap_voice_latency_stddev_ms_by_site
+          / sqrt(wireless_ap_voice_latency_fresh_sample_count_by_site)
+
+      - record: wireless_ap_voice_latency_ci95_low_ms_by_site
+        expr: |
+          wireless_ap_voice_latency_mean_ms_by_site
+          - (1.96 * wireless_ap_voice_latency_sem_ms_by_site)
+
+      - record: wireless_ap_voice_latency_ci95_high_ms_by_site
+        expr: |
+          wireless_ap_voice_latency_mean_ms_by_site
+          + (1.96 * wireless_ap_voice_latency_sem_ms_by_site)
+
+      # Counts only packets in the WLC "very_high" latency bucket and gates the
+      # result to APs that also have a current voice latency sample.
+      - record: wireless_ap_voice_latency_very_high_packets
+        expr: |
+          sum by (wlc, ap_name, site_tag, slot_id, band, client_generation) (
+            wireless_ap_ac_latency_packets_cli{
+              access_category="voice",
+              latency_level="very_high"
+            } > 0
+            and on (wlc, ap_name, site_tag, policy_tag, rf_tag, slot_id, band, client_generation)
+            wireless_ap_voice_latency_avg_ms
+          )

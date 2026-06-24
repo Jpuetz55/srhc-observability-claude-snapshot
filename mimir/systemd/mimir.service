@@ -1,0 +1,27 @@
+[Unit]
+Description=Grafana Mimir local metrics backend
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+# Run as the prometheus user because Prometheus owns the local metrics storage
+# tree on collectors01.
+User=prometheus
+Group=prometheus
+Type=simple
+WorkingDirectory=/var/lib/prometheus/mimir
+# The activity tracker file helps diagnose slow or stuck Mimir requests without
+# enabling broader debug logging.
+ExecStart=/usr/local/bin/mimir -config.file=/etc/mimir/mimir.yaml -activity-tracker.filepath=/var/lib/prometheus/mimir/metrics-activity.log
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+# Systemd sandboxing keeps Mimir read-only except for its data and log paths.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/prometheus/mimir /var/log/mimir
+
+[Install]
+WantedBy=multi-user.target

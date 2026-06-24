@@ -1,0 +1,29 @@
+[Unit]
+Description=Parse wireless RF evidence into node exporter textfile metrics
+Documentation=file:/opt/grafana-mimir-observability/docs/wireless-rf-textfile-ingestion.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/grafana-mimir-observability
+# Defaults are safe for a parser-only run against the latest raw WLC evidence.
+# /etc/default/wireless-rf-textfile can override them for a host-specific setup.
+Environment=WIRELESS_RF_INPUT=data/wireless-rf/raw/wlc_rf_raw.txt
+Environment=WIRELESS_RF_WLC=unknown
+Environment=WIRELESS_RF_BAND=5ghz
+Environment=WIRELESS_RF_PROM_OUT=data/wireless-rf/out/wlc_rf.prom
+Environment=TEXTFILE_COLLECTOR_DIR=/var/lib/node_exporter/textfile_collector
+EnvironmentFile=-/etc/default/wireless-rf-textfile
+# Fail before running the parser if the expected raw evidence file is missing.
+ExecStartPre=/usr/bin/test -f ${WIRELESS_RF_INPUT}
+# Parse raw evidence into repo-local output first, then atomically install the
+# generated Prometheus textfile where node_exporter will scrape it.
+ExecStart=/usr/bin/make wireless-rf-parse INPUT=${WIRELESS_RF_INPUT} WLC=${WIRELESS_RF_WLC} BAND=${WIRELESS_RF_BAND} RF_PROM_OUT=${WIRELESS_RF_PROM_OUT}
+ExecStart=/usr/bin/install -D -m 0644 ${WIRELESS_RF_PROM_OUT} ${TEXTFILE_COLLECTOR_DIR}/wlc_rf.prom
+# Restrict writes to the repository data directory and node_exporter textfiles.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/grafana-mimir-observability/data /var/lib/node_exporter/textfile_collector
