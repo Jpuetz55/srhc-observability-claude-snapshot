@@ -3,10 +3,10 @@ set -euo pipefail
 # Install the WLC capture-session EPC ingest service/timer.
 #
 # A one-minute timer pokes the local Study Web ingest-scan endpoint so an
-# exported EPC the WLC SCP-pushes to the collector is validated, hashed,
-# promoted from incoming/ into pcaps/, registered as a wlc_epc capture, and
-# parsed -- with no operator action. Study Web owns the ingest; this unit only
-# triggers it on localhost. It stores no WLC or SCP secrets and never SSHes.
+# exported EPC the WLC SCP-pushes to the collector is validated, finalized as a
+# service-owned pcaps/ artifact, registered as a wlc_epc capture, and parsed --
+# with no operator action. Study Web owns the ingest; this unit only triggers it
+# on localhost. It stores no WLC or SCP secrets and never SSHes.
 
 usage() {
   cat <<'EOF'
