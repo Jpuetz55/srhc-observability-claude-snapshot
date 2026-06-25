@@ -1,6 +1,6 @@
 [Unit]
 Description=Ingest exported WLC capture-session EPCs SCP-pushed to the collector
-Documentation=file:/home/appsadmin/grafana-mimir-observability/docs/wireless/vocera-media-dnac-icap-runbook.md
+Documentation=file:/home/appsadmin/grafana-mimir-observability/docs/wireless/vocera-wlc-continuous-capture-runbook.md
 After=network-online.target vocera-rf-validation-study-web.service
 Wants=network-online.target
 
@@ -18,5 +18,5 @@ EnvironmentFile=-/etc/default/vocera-media-qoe-wlc-session-ingest
 ExecStart=/usr/bin/bash scripts/run_vocera_wlc_session_ingest.sh
 NoNewPrivileges=true
 ProtectSystem=full
-ProtectHome=true
+ProtectHome=read-only
 PrivateTmp=true
