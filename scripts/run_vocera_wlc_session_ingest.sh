@@ -14,7 +14,19 @@ set -euo pipefail
 host="${STUDY_WEB_INGEST_HOST:-127.0.0.1}"
 port="${STUDY_WEB_INGEST_PORT:-${VOCERA_RF_STUDY_WEB_PORT:-8097}}"
 timeout="${STUDY_WEB_INGEST_TIMEOUT:-600}"
+lock_file="${STUDY_WEB_WLC_INGEST_LOCK_FILE:-/run/vocera-media-qoe/wlc-session-ingest.lock}"
 url="http://${host}:${port}/api/media-qoe/wlc/sessions/ingest-scan"
+
+lock_dir="$(dirname "${lock_file}")"
+if [[ ! -d "${lock_dir}" ]]; then
+  mkdir -p "${lock_dir}"
+fi
+
+exec 9>"${lock_file}"
+if ! flock -n 9; then
+  printf '{"event":"wlc_ingest_scan_skipped","reason":"already_running"}\n'
+  exit 0
+fi
 
 curl -fsS -m "${timeout}" -X POST -H 'content-type: application/json' -d '{}' "${url}"
 echo
