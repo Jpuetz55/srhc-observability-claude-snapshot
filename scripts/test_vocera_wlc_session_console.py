@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Security/contract tests for the human-operated WLC console recorder."""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "scripts" / "run_vocera_wlc_session_console.sh"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def test_script_contract() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+    script_lines = [line.strip() for line in text.splitlines() if line.strip().startswith("script ")]
+    require(script_lines, "recorder must invoke script(1)")
+    invocation = script_lines[0]
+    require(SCRIPT.is_file(), "missing WLC session console recorder")
+    require(SCRIPT.stat().st_mode & 0o111, "console recorder should be executable")
+    require("script -q -f -e --log-out" in invocation, "recorder must use output-only script logging")
+    require("--log-timing" in invocation, "recorder must write timing metadata")
+    require("--log-in" not in invocation, "recorder must not log terminal input")
+    require("--log-io" not in invocation, "recorder must not combine input/output streams")
+    require("sshpass" not in text, "recorder must not automate SSH passwords")
+    require("input_logging_enabled" in text and "False" in text, "metadata must state input logging is disabled")
+    require("command_runner" in text and "False" in text, "metadata must state this is not a command runner")
+
+
+def test_make_and_ui_contract() -> None:
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    ui = (ROOT / "web" / "study-ui" / "src" / "components" / "MediaWlcCaptureSessions.tsx").read_text(encoding="utf-8")
+    require("vocera-media-qoe-wlc-session-console:" in makefile, "Makefile must expose the console target")
+    require("run_vocera_wlc_session_console.sh" in makefile, "Makefile console target must call the recorder")
+    require("WLC_SSH_USER" in makefile and "WLC_SSH_HOST" in makefile, "console target must require explicit SSH identity")
+    require("Logged WLC console" in ui, "session UI must expose logged-console command guidance")
+    require("vocera-media-qoe-wlc-session-console" in ui, "session UI should generate the console make command")
+
+
+def test_help_runs() -> None:
+    result = subprocess.run([str(SCRIPT), "--help"], cwd=ROOT, capture_output=True, text=True)
+    require(result.returncode == 0, f"--help should succeed: {result.stderr}")
+    require("Output artifacts:" in result.stdout, "help should document output artifacts")
+    require("not stored" in result.stdout, "help should document password behavior")
+
+
+def main() -> int:
+    test_script_contract()
+    test_make_and_ui_contract()
+    test_help_runs()
+    print("OK: WLC session console recorder tests passed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
