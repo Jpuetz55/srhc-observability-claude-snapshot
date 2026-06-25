@@ -69,10 +69,21 @@ def test_force_opt_in() -> None:
         )
 
 
+def test_short_validation_smoke_target() -> None:
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    require("vocera-media-qoe-wlc-session-smoke-init:" in makefile, "Makefile must expose a 90-second smoke package target")
+    require("WLC_CAPTURE_MODE=short_validation" in makefile, "smoke target must force short validation mode")
+    require("WLC_SHORT_VALIDATION_DURATION_SECONDS=90" in makefile, "smoke target must force the 90-second duration")
+    expansion = expand_target("WLC_CAPTURE_MODE=short_validation", "WLC_SHORT_VALIDATION_DURATION_SECONDS=90")
+    require("--capture-mode \"short_validation\"" in expansion, "session init must pass short validation mode to the CLI")
+    require("--short-validation-duration-seconds \"90\"" in expansion, "session init must pass the smoke duration to the CLI")
+
+
 def main() -> int:
     test_make_target_defines_force_default()
     test_force_off_by_default()
     test_force_opt_in()
+    test_short_validation_smoke_target()
     print("OK: WLC session Make safety tests passed")
     return 0
 
