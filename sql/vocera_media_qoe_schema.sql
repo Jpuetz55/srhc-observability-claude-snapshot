@@ -724,8 +724,9 @@ create table if not exists vocera_media_session_artifacts (
   validated_at timestamptz,
   ingest_state text not null default 'waiting_for_export'
     check (ingest_state in (
-      'waiting_for_export', 'upload_detected', 'validating', 'imported',
-      'parsing', 'parsed', 'failed', 'quarantined'
+      'waiting_for_export', 'upload_detected', 'waiting_for_stability',
+      'validating', 'validated', 'promoted', 'registered', 'imported',
+      'parsing', 'parsed', 'failed', 'retry_pending', 'quarantined'
     )),
   capture_id text references vocera_media_captures(capture_id) on delete set null,
   parser_status text,
@@ -750,6 +751,20 @@ create index if not exists idx_vocera_media_session_artifacts_capture
 create unique index if not exists uq_vocera_media_session_artifacts_session_sha
   on vocera_media_session_artifacts (capture_session_id, sha256)
   where sha256 is not null;
+
+alter table vocera_media_session_artifacts
+  drop constraint if exists vocera_media_session_artifacts_ingest_state_check;
+
+alter table vocera_media_session_artifacts
+  drop constraint if exists chk_vocera_media_session_artifacts_ingest_state;
+
+alter table vocera_media_session_artifacts
+  add constraint chk_vocera_media_session_artifacts_ingest_state
+  check (ingest_state in (
+    'waiting_for_export', 'upload_detected', 'waiting_for_stability',
+    'validating', 'validated', 'promoted', 'registered', 'imported',
+    'parsing', 'parsed', 'failed', 'retry_pending', 'quarantined'
+  ));
 
 alter table vocera_media_study_archives
   add column if not exists updated_at timestamptz,
