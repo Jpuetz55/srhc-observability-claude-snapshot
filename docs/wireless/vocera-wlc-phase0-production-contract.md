@@ -227,12 +227,18 @@ Do not enable `vocera-media-qoe-wlc-session-ingest.timer` until:
 
 1. Schema and app code match the reviewed commit.
 2. A production backup exists and was restored in rehearsal.
-3. The Phase 0 rehearsal matrix passes.
-4. A manual localhost empty scan succeeds.
-5. One real 90-second WLC smoke export succeeds end to end.
-6. The final EPC is root-owned and not writable by the SCP account.
-7. Generic ICAP/raw-PCAP ingest ignores WLC roots.
-8. WLC cleanup was confirmed after export.
+3. Required additive schema changes were applied through:
+
+   ```bash
+   make vocera-media-qoe-apply-migrations
+   ```
+
+4. The Phase 0 rehearsal matrix passes.
+5. A manual localhost empty scan succeeds.
+6. One real 90-second WLC smoke export succeeds end to end.
+7. The final EPC is root-owned and not writable by the SCP account.
+8. Generic ICAP/raw-PCAP ingest ignores WLC roots.
+9. WLC cleanup was confirmed after export.
 
 Enable only after those gates:
 
