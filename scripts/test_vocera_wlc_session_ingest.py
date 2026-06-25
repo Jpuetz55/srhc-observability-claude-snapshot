@@ -5,8 +5,9 @@ Two layers:
 
 1. Unit tests for the pure ingest primitives in ``vocera_wlc_session_ingest`` --
    upload-stability decisions, pcap/pcapng magic-byte validation, hashing,
-   atomic promotion, scan scoping, and path-traversal guards. These cover the
-   security- and correctness-critical building blocks without a database.
+   owner-controlled finalization, scan scoping, and path-traversal guards. These
+   cover the security- and correctness-critical building blocks without a
+   database.
 2. Text-contract assertions for the Study-Web-owned orchestration and schema
    that cannot be exercised here (no fastapi/psql): the generic raw-file path
    must keep ignoring WLC sessions, the shared parser executor must be reused,
@@ -19,6 +20,8 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import os
+import stat
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -72,7 +75,7 @@ def test_sha256_file_matches_known_content() -> None:
 
 
 def test_growing_upload_is_never_ready() -> None:
-    """A file still being SCP-written must not be promoted/parsed."""
+    """A file still being SCP-written must not be finalized or parsed."""
 
     now = datetime(2026, 6, 24, 18, 0, 0, tzinfo=timezone.utc)
     first = {"size_bytes": 100, "mtime_ns": 10}
@@ -122,7 +125,7 @@ def test_is_stable_with_growing_then_settled_file() -> None:
         require(ingest.is_stable(path, polls=3, delay_seconds=0, sleep=noop), "a settled file is stable")
 
 
-def test_atomic_move_promotes_and_creates_destination() -> None:
+def test_atomic_move_is_legacy_same_owner_helper() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         src = root / "incoming" / "s.pcap"
@@ -136,6 +139,105 @@ def test_atomic_move_promotes_and_creates_destination() -> None:
         require(ingest.sha256_file(dst) == before, "atomic_move must preserve content")
 
 
+def test_finalize_upload_creates_owner_controlled_final_file() -> None:
+    """Finalization must copy into a non-writable final file, not rename upload ownership."""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        src = root / "incoming" / "s.pcap"
+        dst = root / "pcaps" / "s.pcap"
+        src.parent.mkdir(parents=True)
+        src.write_bytes(_pcap_bytes(size=256))
+        result = ingest.finalize_upload_to_pcaps(
+            src,
+            dst,
+            final_uid=os.geteuid(),
+            final_gid=os.getegid(),
+            final_mode=0o400,
+            min_free_bytes=0,
+        )
+        require(dst.is_file(), "finalized EPC must exist in pcaps/")
+        require(not src.exists(), "claimed incoming source should be removed after successful finalization")
+        final_stat = dst.stat()
+        require(final_stat.st_uid == os.geteuid(), "final owner should be controlled by finalization")
+        require(final_stat.st_gid == os.getegid(), "final group should be controlled by finalization")
+        require(stat.S_IMODE(final_stat.st_mode) == 0o400, "final mode should be controlled by finalization")
+        require(stat.S_IMODE(final_stat.st_mode) & 0o222 == 0, "final EPC should have no write mode bits")
+        require(result["sha256"] == ingest.sha256_file(dst), "final SHA-256 must match returned digest")
+
+
+def test_finalize_upload_rejects_symlink_and_hardlink() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        src_dir = root / "incoming"
+        src_dir.mkdir()
+        real = src_dir / "real.pcap"
+        real.write_bytes(_pcap_bytes(size=128))
+
+        symlink = src_dir / "linked.pcap"
+        symlink.symlink_to(real)
+        try:
+            ingest.finalize_upload_to_pcaps(symlink, root / "pcaps" / "linked.pcap", min_free_bytes=0)
+        except ingest.IngestFinalizationError as exc:
+            require(exc.category == ingest.FAIL_SYMLINK_REJECTED, f"bad symlink category: {exc.category}")
+        else:
+            raise AssertionError("symlink upload should be rejected")
+
+        hardlink = src_dir / "hardlinked.pcap"
+        os.link(real, hardlink)
+        try:
+            ingest.finalize_upload_to_pcaps(real, root / "pcaps" / "real.pcap", min_free_bytes=0)
+        except ingest.IngestFinalizationError as exc:
+            require(exc.category == ingest.FAIL_HARDLINK_REJECTED, f"bad hardlink category: {exc.category}")
+        else:
+            raise AssertionError("hard-linked upload should be rejected")
+
+
+def test_finalize_upload_rejects_size_and_disk_limits() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        src = root / "incoming" / "s.pcap"
+        src.parent.mkdir(parents=True)
+        src.write_bytes(_pcap_bytes(size=128))
+        try:
+            ingest.finalize_upload_to_pcaps(src, root / "pcaps" / "too-large.pcap", max_bytes=4, min_free_bytes=0)
+        except ingest.IngestFinalizationError as exc:
+            require(exc.category == ingest.FAIL_SIZE_LIMIT_EXCEEDED, f"bad size category: {exc.category}")
+        else:
+            raise AssertionError("oversized upload should be rejected")
+        require(src.exists(), "oversized upload should remain for operator review")
+
+        try:
+            ingest.finalize_upload_to_pcaps(src, root / "pcaps" / "no-space.pcap", min_free_bytes=10**18)
+        except ingest.IngestFinalizationError as exc:
+            require(exc.category == ingest.FAIL_DISK_SPACE_INSUFFICIENT, f"bad disk category: {exc.category}")
+        else:
+            raise AssertionError("disk-space failure should be reported")
+        require(src.exists(), "disk-space failure should not delete the source upload")
+
+
+def test_finalize_upload_rejects_source_inode_swap() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        src = root / "incoming" / "s.pcap"
+        dst = root / "pcaps" / "s.pcap"
+        src.parent.mkdir(parents=True)
+        src.write_bytes(_pcap_bytes(size=256))
+
+        def swap_source(path: Path) -> None:
+            path.unlink()
+            path.write_bytes(_pcap_bytes(magic=b"\xa1\xb2\xc3\xd4", size=512))
+
+        try:
+            ingest.finalize_upload_to_pcaps(src, dst, min_free_bytes=0, before_commit_hook=swap_source)
+        except ingest.IngestFinalizationError as exc:
+            require(exc.category == ingest.FAIL_SOURCE_CHANGED, f"bad source-change category: {exc.category}")
+        else:
+            raise AssertionError("source inode swap should be rejected")
+        require(src.exists(), "new swapped source should be preserved")
+        require(not dst.exists(), "untrusted final artifact should not be created")
+
+
 def test_iter_incoming_pcaps_scope() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -146,7 +248,7 @@ def test_iter_incoming_pcaps_scope() -> None:
         wanted = incoming / "sess-1.pcap"
         wanted.write_bytes(_pcap_bytes())
         (incoming / "notes.txt").write_text("not a capture")  # wrong extension
-        (pcaps / "already.pcap").write_bytes(_pcap_bytes())   # already promoted, must be ignored
+        (pcaps / "already.pcap").write_bytes(_pcap_bytes())   # already finalized, must be ignored
         (root / "studyA" / "sess-1" / "cli").mkdir()
         (root / "loose.pcap").write_bytes(_pcap_bytes())       # not in a session package
         found = list(ingest.iter_incoming_pcaps(root))
@@ -188,7 +290,7 @@ def test_is_within_traversal_guard() -> None:
 def test_batch_publisher_excludes_wlc_dirs() -> None:
     """The generic ICAP batch publisher must never discover WLC packages.
 
-    A promoted session EPC lives under wlc-sessions/<study>/<session>/pcaps/; if
+    A finalized session EPC lives under wlc-sessions/<study>/<session>/pcaps/; if
     the recursive batch scanner found it, the one-minute textfile path would
     double-parse it and mislabel a WLC EPC as ordinary ICAP evidence.
     """
@@ -236,14 +338,14 @@ def test_study_web_ingest_contract() -> None:
     require('@app.post("/api/media-qoe/wlc/sessions/ingest-scan")' in main_text, "Study Web should expose the ingest-scan trigger")
     require('@app.get("/api/media-qoe/wlc/sessions/{session_id}/artifacts")' in main_text, "Study Web should expose session artifact status")
     require("def media_wlc_validate_session_capture(" in main_text, "Study Web should validate session-package captures separately")
-    require("wlc_ingest.atomic_move(" in main_text, "ingest must atomically promote incoming/ into pcaps/")
-    require("wlc_ingest.looks_like_pcap(" in main_text, "ingest must validate capture containers before import")
+    require("wlc_ingest.finalize_upload_to_pcaps(" in main_text, "ingest must finalize uploads into service-owned pcaps/ artifacts")
+    require("failure_category" in main_text, "ingest must persist structured finalization/quarantine reasons")
     # Hardening: the scan trigger is localhost-only.
     require("def media_require_local_request(" in main_text, "the ingest-scan trigger must enforce local-only callers")
     require("media_require_local_request(request)" in main_text, "the ingest-scan endpoint must call the local-only guard")
     require('"127.0.0.1", "::1"' in main_text, "the local guard must allow only loopback callers")
-    # Hardening: stranded post-promotion artifacts are retried automatically.
-    require("def media_wlc_retry_promoted_artifacts(" in main_text, "ingest must auto-retry artifacts stranded after promotion")
+    # Hardening: stranded post-finalization artifacts are retried automatically.
+    require("def media_wlc_retry_promoted_artifacts(" in main_text, "ingest must auto-retry artifacts stranded after finalization")
     require("retried = media_wlc_retry_promoted_artifacts(" in main_text, "the scan must run the retry pass")
     require("ingest_state in ('promoted', 'registered', 'imported', 'failed', 'retry_pending')" in main_text, "retry must target promoted/registered/imported/failed artifacts with a promoted path")
     require("def media_wlc_epc_visibility(" in main_text, "ingest must classify EPC visibility before making parser claims")
@@ -374,7 +476,11 @@ def main() -> int:
     test_sha256_file_matches_known_content()
     test_growing_upload_is_never_ready()
     test_is_stable_with_growing_then_settled_file()
-    test_atomic_move_promotes_and_creates_destination()
+    test_atomic_move_is_legacy_same_owner_helper()
+    test_finalize_upload_creates_owner_controlled_final_file()
+    test_finalize_upload_rejects_symlink_and_hardlink()
+    test_finalize_upload_rejects_size_and_disk_limits()
+    test_finalize_upload_rejects_source_inode_swap()
     test_iter_incoming_pcaps_scope()
     test_parse_session_rel_and_promoted_path()
     test_artifact_id_is_deterministic_and_scoped()
