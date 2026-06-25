@@ -30,7 +30,7 @@ function numericValue(value: string, fallback: number): number {
 }
 
 // Friendly labels for the session EPC ingest lifecycle. The collector detects a
-// completed SCP upload, validates and hashes it, promotes it into pcaps/, and
+// completed SCP upload, finalizes it as service-owned pcaps/ evidence, and
 // parses it automatically; these states surface that progress for the operator.
 const INGEST_STATE_LABELS: Record<string, string> = {
   waiting_for_export: 'Waiting for WLC export',
@@ -38,7 +38,7 @@ const INGEST_STATE_LABELS: Record<string, string> = {
   waiting_for_stability: 'Waiting for stable upload',
   validating: 'Validating artifact',
   validated: 'Validated',
-  promoted: 'Promoted to final evidence',
+  promoted: 'Finalized as evidence',
   registered: 'Registered',
   imported: 'Imported',
   parsing: 'Parsing',
@@ -763,7 +763,7 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
           <p className="mt-1 text-xs text-slate-500">
             After <span className="font-mono">stop-export.cli</span> succeeds, the WLC SCP-pushes the EPC into the session
             <span className="font-mono"> incoming/</span> folder. A one-minute local timer on the collector detects the
-            completed upload, validates and hashes it, promotes it into <span className="font-mono">pcaps/</span>, registers it
+            completed upload, validates it, finalizes it as service-owned <span className="font-mono">pcaps/</span> evidence, registers it
             as a <span className="font-mono">wlc_epc</span> capture, and parses it automatically — no manual move, hash,
             register, or parse step. Logged WLC console output is parsed as <span className="font-mono">wlc_terminal_output</span> evidence.
             This button just refreshes the displayed status.
