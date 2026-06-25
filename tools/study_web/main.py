@@ -8,6 +8,7 @@ import hashlib
 import ipaddress
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -6044,6 +6045,118 @@ def media_wlc_ingest_scan(*, session_id: str | None = None) -> dict[str, Any]:
     }
 
 
+def _media_wlc_epoch(value: str | None) -> float:
+    parsed = _media_parse_iso(value)
+    return parsed.timestamp() if parsed else 0.0
+
+
+def media_wlc_pending_upload_summary(root: Path) -> dict[str, Any]:
+    """Return bounded filesystem health for staged WLC EPC uploads."""
+
+    pending = list(wlc_ingest.iter_incoming_pcaps(root, allowed_extensions=media_allowed_extensions()))
+    now = datetime.now(timezone.utc)
+    oldest_seconds = 0.0
+    for path in pending:
+        try:
+            mtime = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+        except OSError:
+            continue
+        age = max(0.0, (now - mtime).total_seconds())
+        oldest_seconds = max(oldest_seconds, age)
+    return {"count": len(pending), "oldest_seconds": oldest_seconds}
+
+
+def media_wlc_ingest_health() -> dict[str, Any]:
+    """Summarize WLC session-ingest health without high-cardinality labels."""
+
+    root = media_wlc_session_root()
+    pending = media_wlc_pending_upload_summary(root)
+    disk_free = 0
+    try:
+        disk_free = int(shutil.disk_usage(root).free) if root.exists() else 0
+    except OSError:
+        disk_free = 0
+    state_rows = media_query_rows(
+        "select ingest_state, count(*) as count "
+        "from vocera_media_session_artifacts "
+        "group by ingest_state "
+        "order by ingest_state;"
+    )
+    quarantine_rows = media_query_rows(
+        "select coalesce(metadata->>'failure_category', 'unknown') as reason, count(*) as count "
+        "from vocera_media_session_artifacts "
+        "where ingest_state = 'quarantined' "
+        "group by reason "
+        "order by reason;"
+    )
+    retry_rows = media_query_rows(
+        "select count(*) as count "
+        "from vocera_media_session_artifacts "
+        "where ingest_state = 'retry_pending';"
+    )
+    last_success_rows = media_query_rows(
+        "select max(updated_at) as updated_at "
+        "from vocera_media_session_artifacts "
+        "where ingest_state in ('parsed', 'imported');"
+    )
+    return {
+        "ok": True,
+        "session_root": str(root),
+        "session_root_exists": root.exists(),
+        "pending_uploads": pending["count"],
+        "oldest_pending_upload_seconds": pending["oldest_seconds"],
+        "disk_free_bytes": disk_free,
+        "artifacts_by_state": {
+            str(row.get("ingest_state") or "unknown"): int(row.get("count") or 0)
+            for row in state_rows
+        },
+        "quarantined_by_reason": {
+            str(row.get("reason") or "unknown"): int(row.get("count") or 0)
+            for row in quarantine_rows
+        },
+        "retry_pending": int(retry_rows[0].get("count") or 0) if retry_rows else 0,
+        "last_success_unixtime": _media_wlc_epoch(last_success_rows[0].get("updated_at") if last_success_rows else None),
+    }
+
+
+def media_wlc_ingest_metrics_text() -> str:
+    """Render WLC ingest health as bounded Prometheus text exposition."""
+
+    health = media_wlc_ingest_health()
+    lines = [
+        "# HELP vocera_wlc_ingest_pending_uploads Current WLC EPC uploads staged in incoming directories.\n",
+        "# TYPE vocera_wlc_ingest_pending_uploads gauge\n",
+        f"vocera_wlc_ingest_pending_uploads {health['pending_uploads']}\n",
+        "# HELP vocera_wlc_ingest_oldest_pending_upload_seconds Age of the oldest pending WLC EPC upload.\n",
+        "# TYPE vocera_wlc_ingest_oldest_pending_upload_seconds gauge\n",
+        f"vocera_wlc_ingest_oldest_pending_upload_seconds {health['oldest_pending_upload_seconds']:.3f}\n",
+        "# HELP vocera_wlc_ingest_disk_free_bytes Free bytes on the WLC session root filesystem.\n",
+        "# TYPE vocera_wlc_ingest_disk_free_bytes gauge\n",
+        f"vocera_wlc_ingest_disk_free_bytes {health['disk_free_bytes']}\n",
+        "# HELP vocera_wlc_ingest_retry_pending Current WLC EPC artifacts awaiting retry.\n",
+        "# TYPE vocera_wlc_ingest_retry_pending gauge\n",
+        f"vocera_wlc_ingest_retry_pending {health['retry_pending']}\n",
+        "# HELP vocera_wlc_ingest_last_success_unixtime Unix timestamp of the last successfully imported or parsed WLC EPC artifact.\n",
+        "# TYPE vocera_wlc_ingest_last_success_unixtime gauge\n",
+        f"vocera_wlc_ingest_last_success_unixtime {health['last_success_unixtime']:.3f}\n",
+        "# HELP vocera_wlc_ingest_artifacts_total Current WLC ingest artifacts by bounded state.\n",
+        "# TYPE vocera_wlc_ingest_artifacts_total gauge\n",
+    ]
+    for state, count in sorted(health["artifacts_by_state"].items()):
+        safe_state = re.sub(r"[^A-Za-z0-9_:-]", "_", state)
+        lines.append(f'vocera_wlc_ingest_artifacts_total{{state="{safe_state}"}} {count}\n')
+    lines.extend(
+        [
+            "# HELP vocera_wlc_ingest_quarantined_total Current quarantined WLC ingest artifacts by bounded failure reason.\n",
+            "# TYPE vocera_wlc_ingest_quarantined_total gauge\n",
+        ]
+    )
+    for reason, count in sorted(health["quarantined_by_reason"].items()):
+        safe_reason = re.sub(r"[^A-Za-z0-9_:-]", "_", reason)
+        lines.append(f'vocera_wlc_ingest_quarantined_total{{reason="{safe_reason}"}} {count}\n')
+    return "".join(lines)
+
+
 def media_require_local_request(request: Request) -> None:
     """Reject non-loopback callers for filesystem-scanning trigger endpoints.
 
@@ -6066,6 +6179,16 @@ def media_qoe_wlc_session_ingest_scan(request: Request, payload: MediaWlcSession
     if session_id:
         media_wlc_validate_id(session_id, "session_id")
     return media_wlc_ingest_scan(session_id=session_id)
+
+
+@app.get("/api/media-qoe/wlc/ingest/status")
+def media_qoe_wlc_ingest_status() -> dict[str, Any]:
+    return media_wlc_ingest_health()
+
+
+@app.get("/api/media-qoe/wlc/ingest/metrics")
+def media_qoe_wlc_ingest_metrics() -> Response:
+    return Response(media_wlc_ingest_metrics_text(), media_type="text/plain; version=0.0.4")
 
 
 @app.get("/api/media-qoe/wlc/sessions/{session_id}/artifacts")
