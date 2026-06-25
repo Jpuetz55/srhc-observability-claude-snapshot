@@ -1,4 +1,4 @@
-.PHONY: help validate plan deploy release status mimir-install mimir-health dashboard-sync-prod-to-dev test test-rf-validation test-pcap-study kustomize-validate wireless-rf-textfile-install wireless-rf-parse wireless-rf-verify-parse wireless-rf-status wireless-rf-smoke-test vocera-dashboard-audit wireless-rf-web wireless-badge-collect wireless-badge-parse wireless-badge-web wireless-rf-install-textfile wireless-rf-install-hourly path-probe-run path-probe-install vocera-survey-refresh vocera-survey-rollback ipad-rf-validation-run ipad-rf-validation-process vocera-media-qoe-parse vocera-media-qoe-dnac-download vocera-media-qoe-dnac-check-api vocera-media-qoe-wlc-attempt-init vocera-media-qoe-wlc-attempt-record vocera-media-qoe-wlc-attempt-validate vocera-media-qoe-wlc-attempt-ingest vocera-media-qoe-wlc-attempt-report vocera-media-qoe-wlc-attempt-list vocera-media-qoe-wlc-session-init vocera-media-qoe-wlc-session-mark vocera-media-qoe-wlc-session-report vocera-media-qoe-wlc-session-list vocera-media-qoe-publish vocera-media-qoe-install vocera-media-qoe-postgres-install vocera-media-qoe-install-db vocera-media-qoe-emit-sql vocera-media-qoe-load-db vocera-media-qoe-data-audit vocera-iperf-qoe-parse vocera-iperf-qoe-install vocera-rf-validation-postgres-install vocera-rf-validation-install-db vocera-rf-validation-study vocera-rf-validation-study-web vocera-rf-validation-study-web-install vocera-rf-validation-parse-badge vocera-rf-validation-inspect-ekahau vocera-rf-validation-parse-ekahau vocera-rf-validation-manual-template vocera-rf-validation-correlate vocera-rf-validation-emit-sql vocera-rf-validation-load-db vocera-rf-validation-all vocera-rf-validation-test topology-postgres-install topology-validate topology-publish topology-publish-dnac topology-load topology-load-poc topology-load-dnac topology-load-dry-run topology-publish-load topology-publish-load-dnac study-web-frontend-build vocera-rf-validation-study-web-legacy
+.PHONY: help validate plan deploy release status mimir-install mimir-health dashboard-sync-prod-to-dev test test-rf-validation test-pcap-study kustomize-validate wireless-rf-textfile-install wireless-rf-parse wireless-rf-verify-parse wireless-rf-status wireless-rf-smoke-test vocera-dashboard-audit wireless-rf-web wireless-badge-collect wireless-badge-parse wireless-badge-web wireless-rf-install-textfile wireless-rf-install-hourly path-probe-run path-probe-install vocera-survey-refresh vocera-survey-rollback ipad-rf-validation-run ipad-rf-validation-process vocera-media-qoe-parse vocera-media-qoe-dnac-download vocera-media-qoe-dnac-check-api vocera-media-qoe-wlc-attempt-init vocera-media-qoe-wlc-attempt-record vocera-media-qoe-wlc-attempt-validate vocera-media-qoe-wlc-attempt-ingest vocera-media-qoe-wlc-attempt-report vocera-media-qoe-wlc-attempt-list vocera-media-qoe-wlc-session-init vocera-media-qoe-wlc-session-mark vocera-media-qoe-wlc-session-report vocera-media-qoe-wlc-session-list vocera-media-qoe-publish vocera-media-qoe-install vocera-media-qoe-wlc-session-ingest-install vocera-media-qoe-postgres-install vocera-media-qoe-install-db vocera-media-qoe-emit-sql vocera-media-qoe-load-db vocera-media-qoe-data-audit vocera-iperf-qoe-parse vocera-iperf-qoe-install vocera-rf-validation-postgres-install vocera-rf-validation-install-db vocera-rf-validation-study vocera-rf-validation-study-web vocera-rf-validation-study-web-install vocera-rf-validation-parse-badge vocera-rf-validation-inspect-ekahau vocera-rf-validation-parse-ekahau vocera-rf-validation-manual-template vocera-rf-validation-correlate vocera-rf-validation-emit-sql vocera-rf-validation-load-db vocera-rf-validation-all vocera-rf-validation-test topology-postgres-install topology-validate topology-publish topology-publish-dnac topology-load topology-load-poc topology-load-dnac topology-load-dry-run topology-publish-load topology-publish-load-dnac study-web-frontend-build vocera-rf-validation-study-web-legacy
 
 # Ensure the repository root is on PYTHONPATH so `python3 -m ...` module targets
 # and the test scripts resolve the top-level `tools` package from a clean
@@ -59,6 +59,9 @@ VOCERA_MEDIA_QOE_WLC_SESSION_ROOT ?= /var/lib/vocera-media-qoe/raw/wlc-sessions
 # session-init CLI refuses to overwrite unless --force is passed; keep that off
 # by default and enable it only with an explicit WLC_SESSION_FORCE=1/yes/true.
 WLC_SESSION_FORCE ?= 0
+# Extra flags passed to the WLC session-ingest installer, e.g. --start-now or
+# --no-enable (the installer enables and starts the one-minute timer by default).
+WLC_SESSION_INGEST_INSTALL_ARGS ?=
 STUDY_ID ?= study_v5000_c1000_multicast
 ATTEMPT_ID ?=
 ATTEMPT_DIR ?=
@@ -527,6 +530,9 @@ vocera-media-qoe-publish:
 
 vocera-media-qoe-install:
 	sudo bash ./scripts/install_vocera_media_qoe_textfile.sh
+
+vocera-media-qoe-wlc-session-ingest-install:
+	sudo bash ./scripts/install_vocera_wlc_session_ingest.sh $(WLC_SESSION_INGEST_INSTALL_ARGS)
 
 vocera-media-qoe-postgres-install:
 	sudo bash ./scripts/install_vocera_media_qoe_postgres.sh --enable --start-now

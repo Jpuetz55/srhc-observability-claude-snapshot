@@ -314,6 +314,28 @@ def test_isolation_and_hardening_contract() -> None:
     require("capture_point: 'ICAP'" not in media_page, "manual raw-file imports must not be mislabeled as ICAP")
 
 
+def test_ingest_installer_contract() -> None:
+    installer = ROOT / "scripts" / "install_vocera_wlc_session_ingest.sh"
+    require(installer.is_file(), "missing WLC session-ingest installer script")
+    require(installer.stat().st_mode & 0o111, "installer script should be executable")
+    text = installer.read_text(encoding="utf-8")
+    require('if [[ "$EUID" -ne 0 ]]; then' in text, "installer must require root")
+    require("/etc/systemd/system/$SERVICE" in text and "/etc/systemd/system/$TIMER" in text, "installer must install both units into /etc/systemd/system")
+    require("SERVICE=vocera-media-qoe-wlc-session-ingest.service" in text, "installer must target the ingest service unit")
+    require("TIMER=vocera-media-qoe-wlc-session-ingest.timer" in text, "installer must target the ingest timer unit")
+    require("DEFAULT_FILE=/etc/default/vocera-media-qoe-wlc-session-ingest" in text, "installer must manage the EnvironmentFile")
+    require('if [[ ! -f "$DEFAULT_FILE" ]]; then' in text, "installer must create the EnvironmentFile only when absent")
+    require("systemctl daemon-reload" in text, "installer must reload systemd")
+    require('systemctl enable --now "$TIMER"' in text, "installer must enable and start the timer")
+    for key in ("STUDY_WEB_INGEST_HOST", "STUDY_WEB_INGEST_PORT", "STUDY_WEB_INGEST_TIMEOUT"):
+        require(key in text, f"installer EnvironmentFile must expose {key}")
+    require("sshpass" not in text, "installer must not introduce SCP credentials")
+
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    require("vocera-media-qoe-wlc-session-ingest-install:" in makefile, "Makefile must expose the ingest install target")
+    require("install_vocera_wlc_session_ingest.sh" in makefile, "Makefile target must run the installer script")
+
+
 def main() -> int:
     test_pcap_magic_detection()
     test_sha256_file_matches_known_content()
@@ -329,6 +351,7 @@ def main() -> int:
     test_session_artifact_schema_contract()
     test_systemd_and_trigger_contract()
     test_isolation_and_hardening_contract()
+    test_ingest_installer_contract()
     print("OK: WLC capture-session ingest tests passed")
     return 0
 
