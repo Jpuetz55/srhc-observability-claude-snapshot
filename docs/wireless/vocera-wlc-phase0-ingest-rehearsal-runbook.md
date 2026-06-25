@@ -178,6 +178,16 @@ The finalized EPC must be service-owned (`root:root` in production) and
 non-writable by the SCP upload account. This file-level assertion is required;
 checking only the parent `pcaps/` directory is not enough.
 
+Before enabling the timer, also verify overlap behavior by starting one scan
+and immediately starting a second timer-trigger invocation. The second trigger
+must exit successfully with:
+
+```json
+{"event":"wlc_ingest_scan_skipped","reason":"already_running"}
+```
+
+It must not queue another scan or create duplicate artifacts.
+
 ## 10–12. Exactly-one assertions
 
 ```bash
