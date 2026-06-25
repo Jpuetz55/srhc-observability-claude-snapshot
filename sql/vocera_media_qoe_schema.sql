@@ -1,5 +1,16 @@
 -- PostgreSQL contract for Vocera media PCAP QoE capture-time history.
 
+create table if not exists schema_migrations (
+  migration_id text primary key,
+  checksum text not null,
+  applied_at timestamptz not null default now(),
+  applied_by text not null,
+  source_commit text not null
+);
+
+create index if not exists idx_schema_migrations_applied_at
+  on schema_migrations (applied_at desc);
+
 create table if not exists vocera_projects (
   project_id text primary key,
   project_name text not null,
@@ -705,11 +716,11 @@ create index if not exists idx_vocera_media_attempt_findings_attempt
 -- ---------------------------------------------------------------------------
 -- A session-owned evidence file the WLC SCP-pushes to the collector (today the
 -- exported EPC; later interactive-console transcripts). The collector detects a
--- completed upload under <session>/incoming/, validates and hashes it, promotes
--- it into <session>/pcaps/, registers it as a wlc_epc capture, and queues the
--- existing parser -- with no manual move/hash/register/parse step. The EPC
--- belongs to the capture session, not a single broadcast attempt: one session
--- EPC may later cover many attempts.
+-- completed upload under <session>/incoming/, validates it, finalizes it into
+-- service-owned <session>/pcaps/ evidence, registers it as a wlc_epc capture,
+-- and queues the existing parser -- with no manual move/hash/register/parse
+-- step. The EPC belongs to the capture session, not a single broadcast attempt:
+-- one session EPC may later cover many attempts.
 create table if not exists vocera_media_session_artifacts (
   artifact_id text primary key,
   capture_session_id text not null references vocera_media_capture_sessions(session_id) on delete cascade,
