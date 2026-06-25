@@ -35,11 +35,16 @@ function numericValue(value: string, fallback: number): number {
 const INGEST_STATE_LABELS: Record<string, string> = {
   waiting_for_export: 'Waiting for WLC export',
   upload_detected: 'Upload detected',
+  waiting_for_stability: 'Waiting for stable upload',
   validating: 'Validating artifact',
+  validated: 'Validated',
+  promoted: 'Promoted to final evidence',
+  registered: 'Registered',
   imported: 'Imported',
   parsing: 'Parsing',
   parsed: 'Parsed',
   failed: 'Failed',
+  retry_pending: 'Retry pending',
   quarantined: 'Quarantined'
 }
 
@@ -66,6 +71,10 @@ function formatBytes(value: string): string {
     return `${(n / (1024 * 1024)).toFixed(1)} MB`
   }
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\"'\"'")}'`
 }
 
 type GroupCandidate = {
@@ -168,6 +177,7 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
   const [activeGroupVlan, setActiveGroupVlan] = useState('')
   const [activeGroupMgid, setActiveGroupMgid] = useState('')
   const [overrideReason, setOverrideReason] = useState('')
+  const [consoleUser, setConsoleUser] = useState('')
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -177,6 +187,21 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
     () => sessions.find((session) => field(session, 'session_state') === 'running') ?? sessions[0],
     [sessions]
   )
+
+  const loggedConsoleCommand = useMemo(() => {
+    const sessionDir = field(latestRunningSession, 'command_package_path')
+    const wlcHost = field(latestRunningSession, 'wlc_name')
+    if (!sessionDir || !wlcHost) {
+      return ''
+    }
+    const user = consoleUser.trim() || '<your-wlc-user>'
+    return [
+      'make vocera-media-qoe-wlc-session-console \\',
+      `  SESSION_DIR=${shellQuote(sessionDir)} \\`,
+      `  WLC_SSH_HOST=${shellQuote(wlcHost)} \\`,
+      `  WLC_SSH_USER=${user.includes('<') ? user : shellQuote(user)}`
+    ].join('\n')
+  }, [consoleUser, latestRunningSession])
 
   const displayedCommandSheets = useMemo(() => {
     if (!activeGroup) {
@@ -575,6 +600,26 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
         {error && <div className="rounded-lg border border-rose-900 bg-rose-950/30 p-3 text-sm text-rose-100">{error}</div>}
         {message && <div className="rounded-lg border border-emerald-900 bg-emerald-950/30 p-3 text-sm text-emerald-100">{message}</div>}
 
+        {loggedConsoleCommand && (
+          <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+            <div className="grid gap-3 lg:grid-cols-[18rem_1fr]">
+              <label className="space-y-1 text-sm text-slate-300">
+                <span>WLC SSH user</span>
+                <input
+                  className={textInputClass()}
+                  value={consoleUser}
+                  onChange={(event) => setConsoleUser(event.target.value)}
+                  placeholder="operator username"
+                />
+              </label>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Logged WLC console</p>
+                <pre className="mt-2 overflow-auto rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300">{loggedConsoleCommand}</pre>
+              </div>
+            </div>
+          </div>
+        )}
+
         {Object.keys(displayedCommandSheets).length > 0 && (
           <div className="space-y-2">
             {Object.entries(displayedCommandSheets).map(([name, text]) => (
@@ -626,9 +671,47 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
           </table>
         </div>
 
+        <div className="overflow-auto rounded-lg border border-slate-800">
+          <table className="min-w-full divide-y divide-slate-800 text-sm">
+            <thead className="bg-slate-950/60 text-left text-xs uppercase tracking-wide text-slate-400">
+              <tr>
+                <th className="px-3 py-2">Attempt</th>
+                <th className="px-3 py-2">State</th>
+                <th className="px-3 py-2">Outcome</th>
+                <th className="px-3 py-2">Group</th>
+                <th className="px-3 py-2">VLAN</th>
+                <th className="px-3 py-2">MGID</th>
+                <th className="px-3 py-2">Receiver member</th>
+                <th className="px-3 py-2">VLAN context</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800">
+              {attempts.map((attempt) => (
+                <tr key={field(attempt, 'attempt_id')} className="text-slate-200">
+                  <td className="px-3 py-2 font-mono text-xs">{field(attempt, 'attempt_id')}</td>
+                  <td className="px-3 py-2">{field(attempt, 'attempt_state', '—')}</td>
+                  <td className="px-3 py-2">{field(attempt, 'audio_result', '—')}</td>
+                  <td className="px-3 py-2 font-mono text-xs">{field(attempt, 'resolved_group_ip') || field(attempt, 'dynamic_multicast_ip', '—')}</td>
+                  <td className="px-3 py-2">{field(attempt, 'resolved_group_vlan') || field(attempt, 'vocera_vlan', '—')}</td>
+                  <td className="px-3 py-2">{field(attempt, 'resolved_mgid', '—')}</td>
+                  <td className="px-3 py-2">{field(attempt, 'receiver_group_member', 'unavailable')}</td>
+                  <td className="px-3 py-2">{field(attempt, 'vlan_context_state', 'unresolved')}</td>
+                </tr>
+              ))}
+              {attempts.length === 0 && (
+                <tr>
+                  <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
+                    No broadcast attempts recorded for this session.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
         <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Session EPC artifacts</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Session artifacts</p>
             <button
               className="rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-200 disabled:opacity-50"
               disabled={busy || loading}
@@ -642,7 +725,8 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
             <span className="font-mono"> incoming/</span> folder. A one-minute local timer on the collector detects the
             completed upload, validates and hashes it, promotes it into <span className="font-mono">pcaps/</span>, registers it
             as a <span className="font-mono">wlc_epc</span> capture, and parses it automatically — no manual move, hash,
-            register, or parse step. This button just refreshes the displayed status.
+            register, or parse step. Logged WLC console output is parsed as <span className="font-mono">wlc_terminal_output</span> evidence.
+            This button just refreshes the displayed status.
           </p>
           <div className="mt-3 overflow-auto rounded-lg border border-slate-800">
             <table className="min-w-full divide-y divide-slate-800 text-sm">
@@ -651,7 +735,7 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
                   <th className="px-3 py-2">File</th>
                   <th className="px-3 py-2">Size</th>
                   <th className="px-3 py-2">SHA-256</th>
-                  <th className="px-3 py-2">Capture point</th>
+                  <th className="px-3 py-2">Artifact kind</th>
                   <th className="px-3 py-2">Ingest state</th>
                   <th className="px-3 py-2">Parser</th>
                   <th className="px-3 py-2">Visibility</th>
@@ -674,7 +758,7 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
                 {artifacts.length === 0 && (
                   <tr>
                     <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
-                      No session EPC artifacts yet. Waiting for WLC export.
+                      No session artifacts yet. Waiting for WLC export or terminal evidence.
                     </td>
                   </tr>
                 )}
