@@ -3,8 +3,10 @@ import {
   createMediaQoeWlcSessionEvent,
   createStudyMediaQoeWlcSession,
   getMediaQoeWlcDefaults,
+  listMediaQoeWlcSessionArtifacts,
   listMediaQoeWlcSessionAttempts,
   listStudyMediaQoeWlcSessions,
+  runMediaQoeWlcSessionIngestScan,
   setMediaQoeWlcAttemptActiveGroup,
   updateMediaQoeWlcSession
 } from '../api/client'
@@ -26,6 +28,45 @@ function textInputClass(): string {
 function numericValue(value: string, fallback: number): number {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : fallback
+}
+
+// Friendly labels for the session EPC ingest lifecycle. The collector detects a
+// completed SCP upload, validates and hashes it, promotes it into pcaps/, and
+// parses it automatically; these states surface that progress for the operator.
+const INGEST_STATE_LABELS: Record<string, string> = {
+  waiting_for_export: 'Waiting for WLC export',
+  upload_detected: 'Upload detected',
+  validating: 'Validating artifact',
+  imported: 'Imported',
+  parsing: 'Parsing',
+  parsed: 'Parsed',
+  failed: 'Failed',
+  quarantined: 'Quarantined'
+}
+
+function ingestStateLabel(state: string): string {
+  return INGEST_STATE_LABELS[state] ?? (state || 'Unknown')
+}
+
+function shortSha(sha: string): string {
+  return sha ? `${sha.slice(0, 12)}…` : '—'
+}
+
+function formatBytes(value: string): string {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n <= 0) {
+    return '—'
+  }
+  if (n < 1024) {
+    return `${n} B`
+  }
+  if (n < 1024 * 1024) {
+    return `${(n / 1024).toFixed(1)} KB`
+  }
+  if (n < 1024 * 1024 * 1024) {
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  }
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
 type GroupCandidate = {
@@ -119,6 +160,7 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
   const [form, setForm] = useState<FormState>(() => formFromDefaults(null))
   const [sessions, setSessions] = useState<StringRow[]>([])
   const [attempts, setAttempts] = useState<StringRow[]>([])
+  const [artifacts, setArtifacts] = useState<StringRow[]>([])
   const [currentAttemptId, setCurrentAttemptId] = useState<string | null>(null)
   const [commandSheets, setCommandSheets] = useState<Record<string, string>>({})
   const [groupSummaryText, setGroupSummaryText] = useState('')
@@ -182,9 +224,16 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
         // Bind active-group resolution to the open attempt, falling back to the
         // most recent attempt so a refresh or operator handoff stays consistent.
         setCurrentAttemptId(attemptResponse.open_attempt_id ?? field(attemptRows[0], 'attempt_id') ?? null)
+        try {
+          const artifactResponse = await listMediaQoeWlcSessionArtifacts(targetSessionId)
+          setArtifacts(artifactResponse.artifacts ?? [])
+        } catch {
+          setArtifacts([])
+        }
       } else {
         setAttempts([])
         setCurrentAttemptId(null)
+        setArtifacts([])
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load WLC capture sessions')
@@ -337,6 +386,21 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to mark WLC session event')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const checkForExports = async () => {
+    const sessionId = field(latestRunningSession, 'session_id')
+    setBusy(true)
+    setError(null)
+    try {
+      const response = await runMediaQoeWlcSessionIngestScan(sessionId || undefined)
+      setMessage(`Ingest scan checked ${response.scanned} incoming upload${response.scanned === 1 ? '' : 's'}.`)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to run session ingest scan')
     } finally {
       setBusy(false)
     }
@@ -563,6 +627,63 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
               )}
             </tbody>
           </table>
+        </div>
+
+        <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Session EPC artifacts</p>
+            <button
+              className="rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-200 disabled:opacity-50"
+              disabled={busy || !latestRunningSession}
+              onClick={() => { void checkForExports() }}
+            >
+              Check for exported EPC
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-slate-500">
+            After <span className="font-mono">stop-export.cli</span> succeeds, the WLC SCP-pushes the EPC into the session
+            <span className="font-mono"> incoming/</span> folder. The collector detects the completed upload, validates and
+            hashes it, promotes it into <span className="font-mono">pcaps/</span>, registers it as a <span className="font-mono">wlc_epc</span>{' '}
+            capture, and parses it automatically — no manual move, hash, register, or parse step. A one-minute timer runs this
+            too; the button just checks immediately.
+          </p>
+          <div className="mt-3 overflow-auto rounded-lg border border-slate-800">
+            <table className="min-w-full divide-y divide-slate-800 text-sm">
+              <thead className="bg-slate-950/60 text-left text-xs uppercase tracking-wide text-slate-400">
+                <tr>
+                  <th className="px-3 py-2">File</th>
+                  <th className="px-3 py-2">Size</th>
+                  <th className="px-3 py-2">SHA-256</th>
+                  <th className="px-3 py-2">Capture point</th>
+                  <th className="px-3 py-2">Ingest state</th>
+                  <th className="px-3 py-2">Parser</th>
+                  <th className="px-3 py-2">Visibility</th>
+                  <th className="px-3 py-2">Detail</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800">
+                {artifacts.map((artifact) => (
+                  <tr key={field(artifact, 'artifact_id')} className="text-slate-200">
+                    <td className="px-3 py-2 font-mono text-xs">{field(artifact, 'source_name', '—')}</td>
+                    <td className="px-3 py-2">{formatBytes(field(artifact, 'size_bytes'))}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{shortSha(field(artifact, 'sha256'))}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{field(artifact, 'artifact_kind', 'wlc_epc')}</td>
+                    <td className="px-3 py-2">{ingestStateLabel(field(artifact, 'ingest_state'))}</td>
+                    <td className="px-3 py-2">{field(artifact, 'parser_status', '—')}</td>
+                    <td className="px-3 py-2">{field(artifact, 'visibility_class', 'pending')}</td>
+                    <td className="px-3 py-2 text-xs text-rose-200">{field(artifact, 'error_message', '')}</td>
+                  </tr>
+                ))}
+                {artifacts.length === 0 && (
+                  <tr>
+                    <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
+                      No session EPC artifacts yet. Waiting for WLC export.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </CollapsibleCard>

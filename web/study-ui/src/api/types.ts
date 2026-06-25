@@ -424,6 +424,11 @@ export type MediaWlcSessionsResponse = {
   sessions: StringRow[]
 }
 
+export type MediaWlcSessionArtifactsResponse = {
+  ok: boolean
+  artifacts: StringRow[]
+}
+
 export type MediaWlcSessionResponse = {
   ok: boolean
   session: StringRow

@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodically import exported WLC capture-session EPCs
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=15s
+Persistent=true
+Unit=vocera-media-qoe-wlc-session-ingest.service
+
+[Install]
+WantedBy=timers.target

@@ -161,9 +161,16 @@ def scp_export_uri(username: str, host: str, path: str, port: int | None = None)
 
 
 def default_export_path(session_id: str, package_dir: Path) -> str:
-    """Return the suggested collector-side PCAP path for final export."""
+    """Return the suggested collector-side SCP upload path for final export.
 
-    return str((package_dir / "pcaps" / f"{session_id}.pcap").resolve(strict=False))
+    The WLC SCP-pushes the exported EPC into ``incoming/`` so the collector can
+    detect a *completed* upload, validate and hash it, and only then promote it
+    into ``pcaps/`` as stable session evidence. Exporting straight into
+    ``pcaps/`` would let a half-written file look like final evidence and could
+    be picked up mid-transfer.
+    """
+
+    return str((package_dir / "incoming" / f"{session_id}.pcap").resolve(strict=False))
 
 
 def wildcard_for_cidr(cidr: str) -> tuple[str, str]:
@@ -533,7 +540,10 @@ Long reproduction workflow:
    b. Run `active-event.cli` (group summary, IGMP state, client details).
    c. Paste the group summary into Study Web and select the active 230.230.x.x group for that attempt.
    d. Run the regenerated `attempt-<attempt-id>-resolved-group.cli` (group detail, source detail, IGMP snooping).
-7. Only then run `stop-export.cli` to stop and export the PCAP.
+7. Only then run `stop-export.cli` to stop and export the PCAP. The WLC
+   SCP-pushes it into `incoming/`; the collector detects the completed upload,
+   validates and hashes it, promotes it into `pcaps/`, and parses it
+   automatically. No manual move, hash, register, or parse step is required.
 8. Run `post-failure.cli` and save output under `cli/`.
 9. After export is confirmed, run `cleanup.cli`.
 
@@ -560,7 +570,7 @@ packet rate during the reproduction window.
 def create_session_package(session: dict[str, Any], target: Path, *, force: bool = False) -> dict[str, Any]:
     """Create a session package and return its manifest."""
 
-    for subdir in ("pcaps", "cli", "notes", "validation", "attempts"):
+    for subdir in ("incoming", "pcaps", "cli", "notes", "validation", "attempts"):
         (target / subdir).mkdir(parents=True, exist_ok=True)
     files = {
         "session.json": json.dumps(session, indent=2, sort_keys=True),

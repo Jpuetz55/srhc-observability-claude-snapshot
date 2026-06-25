@@ -252,6 +252,7 @@ test:
 	python3 ./scripts/test_vocera_wlc_cli.py
 	python3 ./scripts/test_vocera_wlc_attempt.py
 	python3 ./scripts/test_vocera_wlc_session.py
+	python3 ./scripts/test_vocera_wlc_session_ingest.py
 	python3 ./scripts/test_wlc_session_make_safety.py
 	python3 ./scripts/test_vocera_iperf_qoe.py
 	python3 ./scripts/test_vocera_rf_validation.py

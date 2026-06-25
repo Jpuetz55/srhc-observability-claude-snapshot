@@ -700,6 +700,57 @@ create index if not exists idx_vocera_media_multicast_observations_receiver
 create index if not exists idx_vocera_media_attempt_findings_attempt
   on vocera_media_attempt_findings (attempt_id, severity, finding_type);
 
+-- ---------------------------------------------------------------------------
+-- WLC capture-session artifacts (Phase 0: SCP session-artifact ingest)
+-- ---------------------------------------------------------------------------
+-- A session-owned evidence file the WLC SCP-pushes to the collector (today the
+-- exported EPC; later interactive-console transcripts). The collector detects a
+-- completed upload under <session>/incoming/, validates and hashes it, promotes
+-- it into <session>/pcaps/, registers it as a wlc_epc capture, and queues the
+-- existing parser -- with no manual move/hash/register/parse step. The EPC
+-- belongs to the capture session, not a single broadcast attempt: one session
+-- EPC may later cover many attempts.
+create table if not exists vocera_media_session_artifacts (
+  artifact_id text primary key,
+  capture_session_id text not null references vocera_media_capture_sessions(session_id) on delete cascade,
+  artifact_kind text not null
+    check (artifact_kind in ('wlc_epc', 'wlc_terminal_output', 'wlc_terminal_timing', 'wlc_transcript')),
+  source_path text not null,
+  final_path text,
+  source_name text not null,
+  sha256 text,
+  size_bytes bigint,
+  received_at timestamptz not null default now(),
+  validated_at timestamptz,
+  ingest_state text not null default 'waiting_for_export'
+    check (ingest_state in (
+      'waiting_for_export', 'upload_detected', 'validating', 'imported',
+      'parsing', 'parsed', 'failed', 'quarantined'
+    )),
+  capture_id text references vocera_media_captures(capture_id) on delete set null,
+  parser_status text,
+  visibility_class text,
+  error_message text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_vocera_media_session_artifacts_session
+  on vocera_media_session_artifacts (capture_session_id, artifact_kind);
+
+create index if not exists idx_vocera_media_session_artifacts_state
+  on vocera_media_session_artifacts (ingest_state, updated_at desc);
+
+create index if not exists idx_vocera_media_session_artifacts_capture
+  on vocera_media_session_artifacts (capture_id);
+
+-- Identical content (same session + content hash) imports at most once so a
+-- repeated SCP push or a repeated ingest scan stays idempotent.
+create unique index if not exists uq_vocera_media_session_artifacts_session_sha
+  on vocera_media_session_artifacts (capture_session_id, sha256)
+  where sha256 is not null;
+
 alter table vocera_media_study_archives
   add column if not exists updated_at timestamptz,
   add column if not exists updated_by text;
