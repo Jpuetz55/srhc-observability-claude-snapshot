@@ -1,20 +1,20 @@
 [Unit]
 Description=Study Workflow Web UI for Vocera RF Validation and Media QoE
-Documentation=file:/home/appsadmin/grafana-mimir-observability/docs/wireless/vocera-badge-ekahau-rf-validation-runbook.md
+Documentation=file:@STUDY_WEB_REPO_ROOT@/docs/wireless/vocera-badge-ekahau-rf-validation-runbook.md
 After=network-online.target vocera-rf-validation-postgres.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/appsadmin/grafana-mimir-observability
-Environment=PYTHONPATH=/home/appsadmin/grafana-mimir-observability/tools
+WorkingDirectory=@STUDY_WEB_REPO_ROOT@
+Environment=PYTHONPATH=@STUDY_WEB_REPO_ROOT@/tools
 Environment=VOCERA_RF_STUDY_WEB_HOST=0.0.0.0
 Environment=VOCERA_RF_STUDY_WEB_PORT=8097
 Environment=VOCERA_RF_STUDY_WEB_SCOPE=vocera_badge
 Environment=VOCERA_RF_STUDY_WEB_USER=study_web
-Environment=VOCERA_RF_VALIDATION_PSQL_BIN=/home/appsadmin/grafana-mimir-observability/scripts/vocera_rf_validation_psql_in_container.sh
+Environment=VOCERA_RF_VALIDATION_PSQL_BIN=@STUDY_WEB_REPO_ROOT@/scripts/vocera_rf_validation_psql_in_container.sh
 Environment=VOCERA_MEDIA_QOE_DATABASE_URL=postgresql://vocera_media_qoe:unused@127.0.0.1:15434/vocera_media_qoe
-Environment=VOCERA_MEDIA_QOE_PSQL_BIN=/home/appsadmin/grafana-mimir-observability/scripts/vocera_media_qoe_psql_in_container.sh
+Environment=VOCERA_MEDIA_QOE_PSQL_BIN=@STUDY_WEB_REPO_ROOT@/scripts/vocera_media_qoe_psql_in_container.sh
 Environment=STUDY_WEB_MEDIA_QOE_RAW_DIR=/var/lib/vocera-media-qoe/raw
 Environment=STUDY_WEB_MEDIA_QOE_ALLOWED_EXTENSIONS=.pcap,.pcapng,.cap
 Environment=STUDY_WEB_MEDIA_QOE_MAX_SCAN_FILES=500
@@ -24,7 +24,7 @@ Environment=STUDY_WEB_MEDIA_QOE_ARCHIVE_ENABLED=false
 Environment=STUDY_WEB_MEDIA_QOE_PARSE_TIMEOUT_SECONDS=480
 Environment=STUDY_WEB_MEDIA_QOE_DNAC_ENV_FILE=/etc/grafana-mimir-observability/secrets/dnac-readonly.env
 Environment=STUDY_WEB_MEDIA_QOE_DNAC_DOWNLOAD_ENABLED=true
-Environment=STUDY_WEB_STATIC_DIR=/home/appsadmin/grafana-mimir-observability/tools/study_web/static
+Environment=STUDY_WEB_STATIC_DIR=@STUDY_WEB_REPO_ROOT@/tools/study_web/static
 Environment=STUDY_WEB_GRAFANA_BASE_PATH=/grafana
 Environment=STUDY_WEB_GRAFANA_ORG_ID=1
 Environment=STUDY_WEB_GRAFANA_THEME=dark
@@ -40,7 +40,7 @@ Environment=STUDY_WEB_GRAFANA_THEME=dark
 # Environment=STUDY_WEB_GRAFANA_MEDIA_QOE_PANEL_ID=1
 EnvironmentFile=-/etc/grafana-mimir-observability/secrets/vocera-rf-validation-postgres.env
 EnvironmentFile=-/etc/grafana-mimir-observability/secrets/vocera-media-qoe-postgres.env
-ExecStart=/bin/bash /home/appsadmin/grafana-mimir-observability/scripts/run_study_web.sh
+ExecStart=/bin/bash @STUDY_WEB_REPO_ROOT@/scripts/run_study_web.sh
 Restart=on-failure
 RestartSec=5s
 NoNewPrivileges=true

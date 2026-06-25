@@ -64,10 +64,24 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 unit_src="$repo_root/systemd/vocera-rf-validation-study-web.service"
 unit_dst="/etc/systemd/system/vocera-rf-validation-study-web.service"
+unit_dropin_dir="/etc/systemd/system/vocera-rf-validation-study-web.service.d"
+unit_dropin_dst="$unit_dropin_dir/zz-study-web-repo-root.conf"
 requirements="$repo_root/tools/study_web/requirements.txt"
 frontend_dir="$repo_root/web/study-ui"
 static_dir="$repo_root/tools/study_web/static"
 venv_dir="${STUDY_WEB_VENV_DIR:-$repo_root/.venv-study-web}"
+
+# The service template is checkout-neutral. Render its path tokens here rather
+# than baking a historical repository name into the installed unit.
+rendered_unit="$(mktemp)"
+cleanup_rendered_unit() { rm -f "$rendered_unit"; }
+trap cleanup_rendered_unit EXIT
+repo_root_sed="$(printf '%s' "$repo_root" | sed 's/[\\/&]/\\&/g')"
+sed "s/@STUDY_WEB_REPO_ROOT@/$repo_root_sed/g" "$unit_src" >"$rendered_unit"
+if grep -q '@STUDY_WEB_REPO_ROOT@' "$rendered_unit"; then
+  echo "Failed to render Study Web repository path in $unit_src" >&2
+  exit 1
+fi
 
 if [[ "$install_python_deps" == "1" ]]; then
   echo "Installing Python dependencies into $venv_dir"
@@ -102,7 +116,25 @@ else
   fi
 fi
 
-install -m 0644 "$unit_src" "$unit_dst"
+# Install a rendered base unit and a late-sorting drop-in. The drop-in is
+# intentional: existing hosts may still have override.conf pointing at an old
+# checkout. zz-study-web-repo-root.conf wins without removing unrelated Grafana
+# embed configuration such as 20-grafana-embed.conf.
+install -m 0644 "$rendered_unit" "$unit_dst"
+install -d -m 0755 "$unit_dropin_dir"
+cat >"$unit_dropin_dst" <<EOF
+[Service]
+WorkingDirectory=$repo_root
+Environment=PYTHONPATH=$repo_root/tools
+Environment=STUDY_WEB_REPO_ROOT=$repo_root
+Environment=STUDY_WEB_VENV_DIR=$venv_dir
+Environment=VOCERA_RF_VALIDATION_PSQL_BIN=$repo_root/scripts/vocera_rf_validation_psql_in_container.sh
+Environment=VOCERA_MEDIA_QOE_PSQL_BIN=$repo_root/scripts/vocera_media_qoe_psql_in_container.sh
+Environment=STUDY_WEB_STATIC_DIR=$static_dir
+ExecStart=
+ExecStart=/bin/bash $repo_root/scripts/run_study_web.sh
+EOF
+chmod 0644 "$unit_dropin_dst"
 systemctl daemon-reload
 
 if [[ "$enable" == "1" ]]; then
@@ -115,5 +147,7 @@ fi
 
 systemctl status vocera-rf-validation-study-web.service --no-pager || true
 echo
+echo "Rendered unit: $unit_dst"
+echo "Repository path override: $unit_dropin_dst"
 echo "Web UI: http://$(hostname -I | awk '{print $1}'):8097/"
 echo "API health: http://$(hostname -I | awk '{print $1}'):8097/api/health"

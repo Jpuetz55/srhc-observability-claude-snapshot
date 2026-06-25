@@ -63,10 +63,26 @@ curl -fsS http://127.0.0.1:8097/healthz
 ```
 
 The installed unit is the runtime authority for checkout paths and environment
-files. Verify it with:
+files. The installer renders the service template with the checkout from which
+it was run and writes a late-sorting override:
+
+```text
+/etc/systemd/system/vocera-rf-validation-study-web.service.d/zz-study-web-repo-root.conf
+```
+
+That override deliberately wins over a stale `override.conf` from an older
+checkout while preserving independent settings such as
+`20-grafana-embed.conf`. It pins `WorkingDirectory`, `PYTHONPATH`, the helper
+scripts, the static UI directory, virtualenv path, and `ExecStart` to one
+checkout. Do not hand-edit these paths after an install; rerun the installer
+from the checkout that should be authoritative.
+
+Verify the active runtime path with:
 
 ```bash
 systemctl cat vocera-rf-validation-study-web.service
+systemctl show vocera-rf-validation-study-web.service \
+  -p WorkingDirectory -p ExecStart -p Environment
 ```
 
 ## WLC capture-session workflow
