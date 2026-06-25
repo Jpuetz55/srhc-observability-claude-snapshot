@@ -118,10 +118,12 @@ WLC SCP output -> incoming/ -> stable/validated -> pcaps/ -> registered -> parse
 When the Phase 0 service is installed and enabled,
 `vocera-media-qoe-wlc-session-ingest.timer` calls a **localhost-only** API every
 minute. It observes a file under the session `incoming/` directory, waits for
-stable size/mtime, checks pcap magic bytes, computes SHA-256, atomically moves
-the file into `pcaps/`, records `capture_point=wlc_epc`, and starts the parser.
-Failures retain the promoted artifact and retry without re-moving or duplicating
-the capture. See [`wireless/vocera-wlc-continuous-capture-runbook.md`](wireless/vocera-wlc-continuous-capture-runbook.md)
+stable size/mtime, checks pcap magic bytes, finalizes the upload into a
+root-owned non-writable `pcaps/` artifact, records `capture_point=wlc_epc`, and
+starts the parser. Failures retain the finalized artifact and retry without
+moving or duplicating the capture. See
+[`wireless/vocera-wlc-continuous-capture-runbook.md`](wireless/vocera-wlc-continuous-capture-runbook.md),
+[`wireless/vocera-wlc-phase0-production-contract.md`](wireless/vocera-wlc-phase0-production-contract.md),
 and [`wireless/vocera-wlc-phase0-ingest-rehearsal-runbook.md`](wireless/vocera-wlc-phase0-ingest-rehearsal-runbook.md).
 
 The generic ICAP/imported-PCAP scanner must never process `wlc-sessions/` or
