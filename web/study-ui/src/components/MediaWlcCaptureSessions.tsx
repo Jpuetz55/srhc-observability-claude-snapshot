@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import {
   createMediaQoeWlcSessionEvent,
   createStudyMediaQoeWlcSession,
@@ -75,6 +75,46 @@ function formatBytes(value: string): string {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\"'\"'")}'`
+}
+
+function artifactMetadata(row: StringRow): Record<string, unknown> {
+  const raw = (row as Record<string, unknown>).metadata
+  if (!raw) {
+    return {}
+  }
+  if (typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>
+  }
+  if (typeof raw !== 'string') {
+    return {}
+  }
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
+}
+
+function transcriptBlocks(row: StringRow): Record<string, unknown>[] {
+  const blocks = artifactMetadata(row).blocks
+  return Array.isArray(blocks)
+    ? blocks.filter((block): block is Record<string, unknown> => Boolean(block) && typeof block === 'object' && !Array.isArray(block))
+    : []
+}
+
+function blockText(block: Record<string, unknown>, key: string, fallback = '—'): string {
+  const value = block[key]
+  if (value === null || value === undefined || value === '') {
+    return fallback
+  }
+  if (typeof value === 'boolean') {
+    return value ? 'yes' : 'no'
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item)).join(', ') || fallback
+  }
+  return String(value)
 }
 
 type GroupCandidate = {
@@ -743,18 +783,56 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
-                {artifacts.map((artifact) => (
-                  <tr key={field(artifact, 'artifact_id')} className="text-slate-200">
-                    <td className="px-3 py-2 font-mono text-xs">{field(artifact, 'source_name', '—')}</td>
-                    <td className="px-3 py-2">{formatBytes(field(artifact, 'size_bytes'))}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{shortSha(field(artifact, 'sha256'))}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{field(artifact, 'artifact_kind', 'wlc_epc')}</td>
-                    <td className="px-3 py-2">{ingestStateLabel(field(artifact, 'ingest_state'))}</td>
-                    <td className="px-3 py-2">{field(artifact, 'parser_status', '—')}</td>
-                    <td className="px-3 py-2">{field(artifact, 'visibility_class', 'pending')}</td>
-                    <td className="px-3 py-2 text-xs text-rose-200">{field(artifact, 'error_message', '')}</td>
-                  </tr>
-                ))}
+                {artifacts.map((artifact) => {
+                  const blocks = transcriptBlocks(artifact)
+                  return (
+                    <Fragment key={field(artifact, 'artifact_id')}>
+                      <tr className="text-slate-200">
+                        <td className="px-3 py-2 font-mono text-xs">{field(artifact, 'source_name', '—')}</td>
+                        <td className="px-3 py-2">{formatBytes(field(artifact, 'size_bytes'))}</td>
+                        <td className="px-3 py-2 font-mono text-xs">{shortSha(field(artifact, 'sha256'))}</td>
+                        <td className="px-3 py-2 font-mono text-xs">{field(artifact, 'artifact_kind', 'wlc_epc')}</td>
+                        <td className="px-3 py-2">{ingestStateLabel(field(artifact, 'ingest_state'))}</td>
+                        <td className="px-3 py-2">{field(artifact, 'parser_status', '—')}</td>
+                        <td className="px-3 py-2">{field(artifact, 'visibility_class', 'pending')}</td>
+                        <td className="px-3 py-2 text-xs text-rose-200">{field(artifact, 'error_message', '')}</td>
+                      </tr>
+                      {blocks.length > 0 && (
+                        <tr className="bg-slate-950/50">
+                          <td className="px-3 py-3 text-xs text-slate-300" colSpan={8}>
+                            <div className="mb-2 font-semibold uppercase tracking-wide text-slate-500">Transcript blocks</div>
+                            <div className="grid gap-2 md:grid-cols-2">
+                              {blocks.map((block) => (
+                                <div
+                                  key={blockText(block, 'block_id')}
+                                  className="rounded border border-slate-800 bg-slate-950/70 p-2"
+                                >
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="font-mono text-cyan-200">{blockText(block, 'block_id')}</span>
+                                    <span>{blockText(block, 'phase')}</span>
+                                    <span className="text-slate-500">{blockText(block, 'association_confidence')}</span>
+                                  </div>
+                                  <div className="mt-1 text-slate-400">
+                                    Attempt: <span className="font-mono">{blockText(block, 'attempt_id')}</span>
+                                  </div>
+                                  <div className="mt-1 text-slate-400">
+                                    Group: <span className="font-mono">{blockText(block, 'vocera_group')}</span>
+                                    {' '}VLAN: <span className="font-mono">{blockText(block, 'resolved_group_vlan')}</span>
+                                    {' '}MGID: <span className="font-mono">{blockText(block, 'mgid')}</span>
+                                  </div>
+                                  <div className="mt-1 text-slate-400">
+                                    Receiver member: <span className="font-mono">{blockText(block, 'receiver_group_member')}</span>
+                                    {' '}Observations: <span className="font-mono">{blockText(block, 'observation_count', '0')}</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
                 {artifacts.length === 0 && (
                   <tr>
                     <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
