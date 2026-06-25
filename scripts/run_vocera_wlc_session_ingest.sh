@@ -2,12 +2,13 @@
 # Thin trigger for the WLC capture-session SCP ingest.
 #
 # Study Web owns the ingest pipeline: it validates a completed SCP upload under
-# <session>/incoming/, hashes it, atomically promotes it into <session>/pcaps/,
-# registers it as a wlc_epc capture, and runs the existing parser -- all
-# in-process so it reuses the same parser executor and capture registration the
-# generic raw-file path uses. This script only asks the local Study Web service
-# to run one ingest-scan pass on a timer, so an exported EPC is imported without
-# any operator action. It stores no WLC or SCP secrets and never SSHes anywhere.
+# <session>/incoming/, finalizes it as a service-owned artifact under
+# <session>/pcaps/, registers it as a wlc_epc capture, and runs the existing
+# parser -- all in-process so it reuses the same parser executor and capture
+# registration the generic raw-file path uses. This script only asks the local
+# Study Web service to run one ingest-scan pass on a timer, so an exported EPC is
+# imported without any operator action. It stores no WLC or SCP secrets and never
+# SSHes anywhere.
 set -euo pipefail
 
 host="${STUDY_WEB_INGEST_HOST:-127.0.0.1}"
