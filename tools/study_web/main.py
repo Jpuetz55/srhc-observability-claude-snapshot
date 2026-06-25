@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import csv
 import hashlib
+import ipaddress
 import json
 import re
 import subprocess
@@ -56,6 +57,8 @@ _VOCERA_MEDIA_QOE_DIR = ROOT / "tools" / "vocera_media_qoe"
 if str(_VOCERA_MEDIA_QOE_DIR) not in sys.path:
     sys.path.insert(0, str(_VOCERA_MEDIA_QOE_DIR))
 import vocera_wlc_session_ingest as wlc_ingest  # noqa: E402
+import vocera_wlc_cli as wlc_cli  # noqa: E402
+import vocera_media_qoe as media_analyzer  # noqa: E402
 
 STATIC_DIR = Path(os.environ.get("STUDY_WEB_STATIC_DIR", str(ROOT / "tools" / "study_web" / "static")))
 SOURCE_TYPES = ("badge_log", "ekahau_json", "manual_csv", "ipad_client_detail", "other")
@@ -5183,6 +5186,127 @@ def media_wlc_upsert_artifact(
     )
 
 
+def media_wlc_epc_visibility(path: Path, session_id: str) -> dict[str, Any]:
+    """Classify what packet evidence a WLC EPC can support.
+
+    This is intentionally a compatibility classifier, not a CAPWAP decoder. It
+    inspects the existing parser's supported packet view and records the claim
+    boundary so the UI does not present RTP quality conclusions for an EPC that
+    only exposes outer CAPWAP or other control-plane traffic.
+    """
+
+    session_rows = media_query_rows(
+        "select sender_ip, receiver_ip, vocera_multicast_pool "
+        "from v_vocera_media_capture_sessions "
+        f"where session_id = {sql_text(session_id)} limit 1;"
+    )
+    session = session_rows[0] if session_rows else {}
+    sender_ip = str(session.get("sender_ip") or "").strip()
+    receiver_ip = str(session.get("receiver_ip") or "").strip()
+    pool_text = str(session.get("vocera_multicast_pool") or "230.230.0.0/20").strip()
+    try:
+        vocera_pool = ipaddress.ip_network(pool_text, strict=False)
+    except ValueError:
+        vocera_pool = ipaddress.ip_network("230.230.0.0/20", strict=False)
+
+    try:
+        udp_packets, packets_read = media_analyzer.iter_pcap_udp_packets(path)
+    except Exception as exc:  # noqa: BLE001 - surface parser compatibility details.
+        return {
+            "visibility_class": "unsupported_link_or_decode",
+            "container_valid": True,
+            "records_seen": None,
+            "ipv4_udp_seen": 0,
+            "claim_limit": f"Container exists, but the supported parser could not decode meaningful packet payload: {exc}",
+            "supports": ["Capture container validation and file-level provenance."],
+            "cannot_prove": [
+                "Receiver-side RTP arrival, RTP loss, RTP jitter, or speaker behavior.",
+                "Vocera multicast delivery at the AP or client.",
+            ],
+            "decode_error": str(exc),
+        }
+
+    capwap_control = 0
+    capwap_data = 0
+    sender_seen = 0
+    receiver_seen = 0
+    vocera_group_seen = 0
+    multicast_udp_seen = 0
+    rtp_headers_visible = 0
+    for packet in udp_packets:
+        ports = {int(packet.src_port), int(packet.dst_port)}
+        if 5246 in ports:
+            capwap_control += 1
+        if 5247 in ports:
+            capwap_data += 1
+        if sender_ip and (packet.src_ip == sender_ip or packet.dst_ip == sender_ip):
+            sender_seen += 1
+        if receiver_ip and (packet.src_ip == receiver_ip or packet.dst_ip == receiver_ip):
+            receiver_seen += 1
+        for value in (packet.src_ip, packet.dst_ip):
+            try:
+                ip_value = ipaddress.ip_address(value)
+            except ValueError:
+                continue
+            if ip_value.is_multicast:
+                multicast_udp_seen += 1
+            if ip_value in vocera_pool:
+                vocera_group_seen += 1
+        if media_analyzer.parse_rtp_header(packet.payload) is not None:
+            rtp_headers_visible += 1
+
+    if packets_read <= 0:
+        visibility_class = "empty_or_unusable"
+        supports = ["File provenance only."]
+        cannot = [
+            "Packet-level multicast evidence.",
+            "RTP loss, jitter, or media-arrival quality.",
+        ]
+    elif rtp_headers_visible > 0 and vocera_group_seen > 0:
+        visibility_class = "inner_voice_visible"
+        supports = ["Visible inner Vocera multicast UDP/RTP timing at this capture point."]
+        cannot = ["End-user speaker output or total mouth-to-ear latency."]
+    elif vocera_group_seen > 0 or multicast_udp_seen > 0:
+        visibility_class = "inner_multicast_visible"
+        supports = ["Visible inner multicast packet arrival and group evidence at this capture point."]
+        cannot = ["RTP loss or jitter unless RTP headers are visible and pass plausibility checks."]
+    elif capwap_data > 0:
+        visibility_class = "outer_capwap_only"
+        supports = ["Outer CAPWAP transport evidence during the capture window."]
+        cannot = ["Receiver-side RTP arrival, RTP loss, RTP jitter, or media-arrival quality."]
+    elif capwap_control > 0 or udp_packets:
+        visibility_class = "control_plane_only"
+        supports = ["Visible UDP/control-plane packet evidence at this capture point."]
+        cannot = ["Native Vocera multicast delivery or RTP quality."]
+    else:
+        visibility_class = "unsupported_link_or_decode"
+        supports = ["Capture container and record-count validation."]
+        cannot = ["Packet-layer delivery or media-quality conclusions."]
+
+    return {
+        "visibility_class": visibility_class,
+        "container_valid": True,
+        "records_seen": packets_read,
+        "ipv4_udp_seen": len(udp_packets),
+        "capwap_control_seen": capwap_control > 0,
+        "capwap_data_seen": capwap_data > 0,
+        "capwap_control_packets": capwap_control,
+        "capwap_data_packets": capwap_data,
+        "sender_inner_ip_seen": sender_seen > 0,
+        "receiver_inner_ip_seen": receiver_seen > 0,
+        "sender_inner_ip_packets": sender_seen,
+        "receiver_inner_ip_packets": receiver_seen,
+        "vocera_group_seen": vocera_group_seen > 0,
+        "vocera_group_packets": vocera_group_seen,
+        "multicast_udp_packets": multicast_udp_seen,
+        "rtp_headers_visible": rtp_headers_visible > 0,
+        "rtp_header_packets": rtp_headers_visible,
+        "supports": supports,
+        "cannot_prove": cannot,
+        "claim_limit": " ".join(cannot),
+    }
+
+
 def _media_wlc_prev_observation(row: dict[str, str] | None) -> tuple[dict[str, int] | None, "datetime | None"]:
     if not row:
         return None, None
@@ -5230,7 +5354,7 @@ def media_wlc_process_incoming(
     now = wlc_ingest.utc_now()
 
     existing = media_wlc_session_artifact_row(artifact_id)
-    if existing and existing.get("ingest_state") in {"imported", "parsing", "parsed"}:
+    if existing and existing.get("ingest_state") in {"promoted", "registered", "imported", "parsing", "parsed", "retry_pending"}:
         return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
                 "state": existing.get("ingest_state"), "detail": "already ingested"}
 
@@ -5250,17 +5374,22 @@ def media_wlc_process_incoming(
     )
 
     if decision in {wlc_ingest.DECISION_WAIT_NEW, wlc_ingest.DECISION_WAIT_CHANGED}:
+        wait_state = "upload_detected" if decision == wlc_ingest.DECISION_WAIT_NEW else "waiting_for_stability"
         media_wlc_upsert_artifact(
-            *base, ingest_state="upload_detected", size_bytes=current_sig["size_bytes"],
-            metadata={"observed": {"signature": current_sig, "observed_at": now.isoformat()}},
+            *base, ingest_state=wait_state, size_bytes=current_sig["size_bytes"],
+            metadata={"observed": {"signature": current_sig, "observed_at": now.isoformat()},
+                      "ingest_decision": decision},
         )
         return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
-                "state": "upload_detected", "decision": decision}
+                "state": wait_state, "decision": decision}
     if decision == wlc_ingest.DECISION_WAIT_TOO_SOON:
         # Keep the original observed_at so the stable interval keeps growing.
-        media_wlc_upsert_artifact(*base, ingest_state="upload_detected", size_bytes=current_sig["size_bytes"])
+        media_wlc_upsert_artifact(
+            *base, ingest_state="waiting_for_stability", size_bytes=current_sig["size_bytes"],
+            metadata={"ingest_decision": decision},
+        )
         return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
-                "state": "upload_detected", "decision": decision}
+                "state": "waiting_for_stability", "decision": decision}
 
     # decision == ready: validate container, hash, promote, register, parse.
     media_wlc_upsert_artifact(*base, ingest_state="validating", size_bytes=current_sig["size_bytes"])
@@ -5272,6 +5401,12 @@ def media_wlc_process_incoming(
         return {"artifact_id": artifact_id, "session_id": session_id, "name": name, "state": "quarantined"}
 
     sha = wlc_ingest.sha256_file(incoming_pcap)
+    visibility = media_wlc_epc_visibility(incoming_pcap, session_id)
+    media_wlc_upsert_artifact(
+        *base, ingest_state="validated", sha256=sha, size_bytes=current_sig["size_bytes"],
+        validated_at=True, visibility_class=visibility.get("visibility_class"),
+        metadata={"visibility": visibility},
+    )
     dup = media_query_rows(
         "select artifact_id, capture_id from vocera_media_session_artifacts "
         f"where capture_session_id = {sql_text(session_id)} and sha256 = {sql_text(sha)} "
@@ -5300,8 +5435,9 @@ def media_wlc_process_incoming(
         return {"artifact_id": artifact_id, "session_id": session_id, "name": name, "state": "failed"}
 
     media_wlc_upsert_artifact(
-        *base, ingest_state="imported", final_path=str(final), sha256=sha,
+        *base, ingest_state="promoted", final_path=str(final), sha256=sha,
         size_bytes=current_sig["size_bytes"], validated_at=True,
+        visibility_class=visibility.get("visibility_class"), metadata={"visibility": visibility},
     )
 
     try:
@@ -5316,6 +5452,10 @@ def media_wlc_process_incoming(
         return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
                 "state": "failed", "detail": str(exc.detail)}
     capture_id = registration["capture_id"]
+    media_wlc_upsert_artifact(
+        *base, ingest_state="registered", final_path=str(final), capture_id=capture_id,
+        visibility_class=visibility.get("visibility_class"),
+    )
 
     if not media_execution_enabled():
         media_wlc_upsert_artifact(
@@ -5402,13 +5542,15 @@ def media_wlc_retry_one(row: dict[str, str]) -> dict[str, Any]:
 
     # Persist the capture_id and keep the artifact retryable so a transient
     # parser-lock conflict on the parse below does not strand it.
-    media_wlc_upsert_artifact(*base, ingest_state="imported", capture_id=capture_id)
+    media_wlc_upsert_artifact(*base, ingest_state="retry_pending", capture_id=capture_id)
     try:
+        media_wlc_upsert_artifact(*base, ingest_state="parsing", capture_id=capture_id)
         parse = media_run_capture_parse(capture_id, study_id, validated, requested_by="wlc-session-ingest-retry")
     except HTTPException as exc:
         if exc.status_code == 409:
+            media_wlc_upsert_artifact(*base, ingest_state="retry_pending", capture_id=capture_id)
             return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
-                    "state": "imported", "detail": "parser busy; will retry next tick"}
+                    "state": "retry_pending", "detail": "parser busy; will retry next tick"}
         media_wlc_upsert_artifact(*base, ingest_state="failed", capture_id=capture_id, parser_status="failed",
                                   error_message=str(exc.detail), metadata={"retry_count": retry_count + 1})
         return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
@@ -5448,7 +5590,7 @@ def media_wlc_retry_promoted_artifacts(
         "coalesce((metadata->>'retry_count')::int, 0) as retry_count "
         "from vocera_media_session_artifacts "
         "where artifact_kind = 'wlc_epc' "
-        "and ingest_state in ('imported', 'failed') "
+        "and ingest_state in ('promoted', 'registered', 'imported', 'failed', 'retry_pending') "
         "and final_path is not null "
         f"{clause}"
         "order by updated_at asc;"
@@ -5458,6 +5600,278 @@ def media_wlc_retry_promoted_artifacts(
         if row.get("artifact_id") in skip:
             continue
         results.append(media_wlc_retry_one(row))
+    return results
+
+
+def media_wlc_terminal_output_paths(root: Path) -> list[tuple[str, str, Path]]:
+    """Return output-only terminal logs under session cli/terminal directories."""
+
+    paths: list[tuple[str, str, Path]] = []
+    if not root.is_dir():
+        return paths
+    for candidate in sorted(root.glob("*/*/cli/terminal/*.out")):
+        if not candidate.is_file():
+            continue
+        try:
+            rel = candidate.resolve(strict=False).relative_to(root.resolve(strict=False))
+        except ValueError:
+            continue
+        parts = rel.parts
+        if len(parts) != 5 or parts[2] != "cli" or parts[3] != "terminal":
+            continue
+        paths.append((parts[0], parts[1], candidate))
+    return paths
+
+
+def _media_wlc_existing_attempt(session_id: str, attempt_id: str | None) -> str | None:
+    if not attempt_id:
+        return None
+    rows = media_query_rows(
+        "select attempt_id from vocera_media_broadcast_attempts "
+        f"where capture_session_id = {sql_text(session_id)} "
+        f"and attempt_id = {sql_text(attempt_id)} limit 1;"
+    )
+    return rows[0].get("attempt_id") if rows else None
+
+
+def _media_wlc_snapshot_id(artifact_id: str, attempt_id: str, phase: str) -> str:
+    raw = f"{artifact_id}\x00{attempt_id}\x00{phase}".encode("utf-8")
+    return "wlcsnap_" + hashlib.sha256(raw).hexdigest()[:24]
+
+
+def _media_wlc_observation_id(artifact_id: str, index: int) -> str:
+    raw = f"{artifact_id}\x00observation\x00{index}".encode("utf-8")
+    return "wlcobs_" + hashlib.sha256(raw).hexdigest()[:24]
+
+
+def media_wlc_store_snapshot(
+    *,
+    artifact_id: str,
+    session_id: str,
+    attempt_id: str,
+    phase: str,
+    parsed: dict[str, Any],
+) -> None:
+    """Store one high-confidence attempt-scoped WLC snapshot."""
+
+    snapshot_id = _media_wlc_snapshot_id(artifact_id, attempt_id, phase)
+    media_query_one(
+        "insert into vocera_media_wlc_snapshots ("
+        "snapshot_id, attempt_id, phase, snapshot_time, receiver_ap, receiver_bssid, "
+        "receiver_channel, receiver_band, receiver_rssi, receiver_snr, receiver_vlan, "
+        "sender_client_vlan, sender_multicast_vlan, receiver_client_vlan, receiver_multicast_vlan, "
+        "receiver_group_member, receiver_group_status, vocera_group, vocera_dynamic_group_ip, "
+        "vocera_dynamic_group_mac, vocera_group_evidence_confidence, vocera_vlan, configured_vocera_vlan, "
+        "resolved_group_vlan, group_vlan, vlan_context_state, mgid, multicast_enabled, "
+        "capwap_multicast_mode, ap_mom_status, igmp_snooping_enabled, igmp_querier_enabled, raw_snapshot"
+        ") values ("
+        f"{sql_text(snapshot_id)}, {sql_text(attempt_id)}, {sql_text(phase)}, {sql_text(parsed.get('snapshot_time'))}, "
+        f"{sql_text(parsed.get('receiver_ap'))}, {sql_text(parsed.get('receiver_bssid'))}, "
+        f"{sql_int(parsed.get('receiver_channel'))}, {sql_text(parsed.get('receiver_band'))}, "
+        f"{sql_int(parsed.get('receiver_rssi'))}, {sql_int(parsed.get('receiver_snr'))}, {sql_int(parsed.get('receiver_vlan'))}, "
+        f"{sql_int(parsed.get('sender_client_vlan'))}, {sql_int(parsed.get('sender_multicast_vlan'))}, "
+        f"{sql_int(parsed.get('receiver_client_vlan'))}, {sql_int(parsed.get('receiver_multicast_vlan'))}, "
+        f"{sql_bool(parsed.get('c1000_group_member'))}, {sql_text(parsed.get('c1000_member_status'))}, "
+        f"{sql_text(parsed.get('vocera_group'))}, {sql_text(parsed.get('vocera_dynamic_group_ip'))}, "
+        f"{sql_text(parsed.get('vocera_dynamic_group_mac'))}, {sql_text(parsed.get('vocera_group_evidence_confidence'))}, "
+        f"{sql_int(parsed.get('vocera_vlan'))}, {sql_int(parsed.get('configured_vocera_vlan'))}, "
+        f"{sql_int(parsed.get('resolved_group_vlan'))}, {sql_int(parsed.get('group_vlan'))}, "
+        f"{sql_text(parsed.get('vlan_context_state'))}, {sql_int(parsed.get('mgid'))}, "
+        f"{sql_bool(parsed.get('multicast_enabled'))}, {sql_text(parsed.get('capwap_multicast_mode'))}, "
+        f"{sql_text(parsed.get('ap_mom_status'))}, {sql_bool(parsed.get('igmp_snooping_enabled'))}, "
+        f"{sql_bool(parsed.get('igmp_querier_enabled'))}, {sql_text(parsed.get('raw_snapshot'))}"
+        ") on conflict (snapshot_id) do update set "
+        "phase = excluded.phase, snapshot_time = excluded.snapshot_time, "
+        "receiver_ap = excluded.receiver_ap, receiver_bssid = excluded.receiver_bssid, "
+        "receiver_channel = excluded.receiver_channel, receiver_band = excluded.receiver_band, "
+        "receiver_rssi = excluded.receiver_rssi, receiver_snr = excluded.receiver_snr, "
+        "receiver_vlan = excluded.receiver_vlan, sender_client_vlan = excluded.sender_client_vlan, "
+        "sender_multicast_vlan = excluded.sender_multicast_vlan, receiver_client_vlan = excluded.receiver_client_vlan, "
+        "receiver_multicast_vlan = excluded.receiver_multicast_vlan, receiver_group_member = excluded.receiver_group_member, "
+        "receiver_group_status = excluded.receiver_group_status, vocera_group = excluded.vocera_group, "
+        "vocera_dynamic_group_ip = excluded.vocera_dynamic_group_ip, vocera_dynamic_group_mac = excluded.vocera_dynamic_group_mac, "
+        "vocera_group_evidence_confidence = excluded.vocera_group_evidence_confidence, vocera_vlan = excluded.vocera_vlan, "
+        "configured_vocera_vlan = excluded.configured_vocera_vlan, resolved_group_vlan = excluded.resolved_group_vlan, "
+        "group_vlan = excluded.group_vlan, vlan_context_state = excluded.vlan_context_state, mgid = excluded.mgid, "
+        "multicast_enabled = excluded.multicast_enabled, capwap_multicast_mode = excluded.capwap_multicast_mode, "
+        "ap_mom_status = excluded.ap_mom_status, igmp_snooping_enabled = excluded.igmp_snooping_enabled, "
+        "igmp_querier_enabled = excluded.igmp_querier_enabled, raw_snapshot = excluded.raw_snapshot;"
+    )
+
+
+def media_wlc_update_attempt_from_snapshot(attempt_id: str, parsed: dict[str, Any]) -> None:
+    """Copy high-confidence parsed WLC evidence onto the attempt summary row."""
+
+    media_query_one(
+        "update vocera_media_broadcast_attempts set "
+        f"receiver_group_member = coalesce({sql_bool(parsed.get('c1000_group_member'))}, receiver_group_member), "
+        f"dynamic_multicast_ip = coalesce({sql_text(parsed.get('vocera_dynamic_group_ip'))}, dynamic_multicast_ip), "
+        f"dynamic_multicast_mac = coalesce({sql_text(parsed.get('vocera_dynamic_group_mac'))}, dynamic_multicast_mac), "
+        f"vocera_group = coalesce({sql_text(parsed.get('vocera_group'))}, vocera_group), "
+        f"vocera_vlan = coalesce({sql_int(parsed.get('vocera_vlan'))}, vocera_vlan), "
+        f"resolved_group_ip = coalesce({sql_text(parsed.get('resolved_group_ip') or parsed.get('vocera_dynamic_group_ip'))}, resolved_group_ip), "
+        f"resolved_group_vlan = coalesce({sql_int(parsed.get('resolved_group_vlan'))}, resolved_group_vlan), "
+        f"resolved_mgid = coalesce({sql_int(parsed.get('mgid'))}, resolved_mgid), "
+        f"vlan_context_state = coalesce({sql_text(parsed.get('vlan_context_state'))}, vlan_context_state), "
+        "updated_at = now() "
+        f"where attempt_id = {sql_text(attempt_id)};"
+    )
+
+
+def media_wlc_store_observations(
+    *,
+    artifact_id: str,
+    session_id: str,
+    attempt_id: str | None,
+    phase: str,
+    observations: list[dict[str, Any]],
+) -> int:
+    """Store parsed multicast observations, session-scoped unless safely bound."""
+
+    count = 0
+    for index, observation in enumerate(observations):
+        observation_id = _media_wlc_observation_id(artifact_id, index)
+        raw = dict(observation)
+        raw["artifact_id"] = artifact_id
+        media_query_one(
+            "insert into vocera_media_multicast_observations ("
+            "observation_id, capture_session_id, attempt_id, observed_at, phase, evidence_source, "
+            "vocera_group_ip, vocera_group_mac, vocera_vlan, source_ip, source_mac, igmp_version, "
+            "mgid, receiver_mac, receiver_ip, receiver_member, receiver_blocklisted, receiver_membership_mode, "
+            "wlc_capwap_group, wlc_capwap_mode, ap_name, ap_mom_status, ap_mgid, ap_delivery_mode, "
+            "ap_rx_packets, ap_tx_packets, ap_slot, capture_confidence, raw_evidence"
+            ") values ("
+            f"{sql_text(observation_id)}, {sql_text(session_id)}, {sql_text(attempt_id)}, now(), {sql_text(phase)}, "
+            f"{sql_text(observation.get('evidence_source') or 'wlc_terminal_output')}, "
+            f"{sql_text(observation.get('vocera_group_ip'))}, {sql_text(observation.get('vocera_group_mac'))}, "
+            f"{sql_int(observation.get('vocera_vlan'))}, {sql_text(observation.get('source_ip'))}, "
+            f"{sql_text(observation.get('source_mac'))}, {sql_text(observation.get('igmp_version'))}, "
+            f"{sql_int(observation.get('mgid'))}, {sql_text(observation.get('receiver_mac'))}, "
+            f"{sql_text(observation.get('receiver_ip'))}, {sql_bool(observation.get('receiver_member'))}, "
+            f"{sql_bool(observation.get('receiver_blocklisted'))}, {sql_text(observation.get('receiver_membership_mode'))}, "
+            f"{sql_text(observation.get('wlc_capwap_group'))}, {sql_text(observation.get('wlc_capwap_mode'))}, "
+            f"{sql_text(observation.get('ap_name'))}, {sql_text(observation.get('ap_mom_status'))}, "
+            f"{sql_int(observation.get('ap_mgid'))}, {sql_text(observation.get('ap_delivery_mode'))}, "
+            f"{sql_int(observation.get('ap_rx_packets'))}, {sql_int(observation.get('ap_tx_packets'))}, "
+            f"{sql_text(observation.get('ap_slot'))}, {sql_text(observation.get('capture_confidence') or 'unknown')}, "
+            f"{media_jsonb(raw)}"
+            ") on conflict (observation_id) do update set "
+            "attempt_id = excluded.attempt_id, observed_at = excluded.observed_at, phase = excluded.phase, "
+            "evidence_source = excluded.evidence_source, vocera_group_ip = excluded.vocera_group_ip, "
+            "vocera_group_mac = excluded.vocera_group_mac, vocera_vlan = excluded.vocera_vlan, "
+            "source_ip = excluded.source_ip, source_mac = excluded.source_mac, igmp_version = excluded.igmp_version, "
+            "mgid = excluded.mgid, receiver_mac = excluded.receiver_mac, receiver_ip = excluded.receiver_ip, "
+            "receiver_member = excluded.receiver_member, receiver_blocklisted = excluded.receiver_blocklisted, "
+            "receiver_membership_mode = excluded.receiver_membership_mode, wlc_capwap_group = excluded.wlc_capwap_group, "
+            "wlc_capwap_mode = excluded.wlc_capwap_mode, ap_name = excluded.ap_name, ap_mom_status = excluded.ap_mom_status, "
+            "ap_mgid = excluded.ap_mgid, ap_delivery_mode = excluded.ap_delivery_mode, ap_rx_packets = excluded.ap_rx_packets, "
+            "ap_tx_packets = excluded.ap_tx_packets, ap_slot = excluded.ap_slot, capture_confidence = excluded.capture_confidence, "
+            "raw_evidence = excluded.raw_evidence;"
+        )
+        count += 1
+    return count
+
+
+def media_wlc_process_terminal_output(*, session_id: str, output_path: Path) -> dict[str, Any]:
+    """Hash, register, parse, and persist one output-only terminal transcript."""
+
+    artifact_id = wlc_ingest.artifact_id_for(session_id, "wlc_terminal_output", output_path.name)
+    existing = media_wlc_session_artifact_row(artifact_id)
+    sha = wlc_ingest.sha256_file(output_path)
+    if existing and existing.get("sha256") == sha and existing.get("ingest_state") == "parsed":
+        return {"artifact_id": artifact_id, "session_id": session_id, "name": output_path.name,
+                "state": "parsed", "detail": "already parsed"}
+
+    text = output_path.read_text(encoding="utf-8", errors="replace")
+    session = media_wlc_session_row(session_id)
+    phase = wlc_cli.infer_transcript_phase(text)
+    attempt_candidates = [
+        attempt_id
+        for attempt_id in wlc_cli.extract_attempt_ids(text)
+        if _media_wlc_existing_attempt(session_id, attempt_id)
+    ]
+    attempt_id = attempt_candidates[0] if len(attempt_candidates) == 1 else None
+    association_confidence = "high" if attempt_id else "low"
+    parsed = wlc_cli.parse_wlc_snapshot(
+        text,
+        phase=phase,
+        receiver_mac=session.get("receiver_mac"),
+        sender_mac=session.get("sender_mac"),
+        expected_vlan=int(session.get("configured_vocera_vlan") or 684),
+    )
+    metadata_path = output_path.with_suffix(".json")
+    recorder_metadata: dict[str, Any] = {}
+    if metadata_path.is_file():
+        try:
+            recorder_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            recorder_metadata = {"metadata_parse_error": "invalid JSON"}
+
+    media_wlc_upsert_artifact(
+        artifact_id,
+        session_id,
+        "wlc_terminal_output",
+        str(output_path),
+        output_path.name,
+        ingest_state="parsed",
+        final_path=str(output_path),
+        sha256=sha,
+        size_bytes=output_path.stat().st_size,
+        validated_at=True,
+        parser_status="parsed",
+        visibility_class="wlc_cli_evidence",
+        metadata={
+            "phase": phase,
+            "attempt_id": attempt_id,
+            "association_confidence": association_confidence,
+            "attempt_candidates": attempt_candidates,
+            "recorder": recorder_metadata,
+        },
+    )
+    if attempt_id:
+        media_wlc_store_snapshot(
+            artifact_id=artifact_id,
+            session_id=session_id,
+            attempt_id=attempt_id,
+            phase=phase,
+            parsed=parsed,
+        )
+        media_wlc_update_attempt_from_snapshot(attempt_id, parsed)
+    observation_count = media_wlc_store_observations(
+        artifact_id=artifact_id,
+        session_id=session_id,
+        attempt_id=attempt_id,
+        phase=phase,
+        observations=parsed.get("multicast_observations") or [],
+    )
+    return {
+        "artifact_id": artifact_id,
+        "session_id": session_id,
+        "name": output_path.name,
+        "state": "parsed",
+        "phase": phase,
+        "attempt_id": attempt_id,
+        "association_confidence": association_confidence,
+        "observation_count": observation_count,
+    }
+
+
+def media_wlc_transcript_scan(*, session_id: str | None = None) -> list[dict[str, Any]]:
+    """Scan output-only terminal logs and parse WLC evidence blocks."""
+
+    root = media_wlc_session_root()
+    results: list[dict[str, Any]] = []
+    for _study_id, sess_id, output_path in media_wlc_terminal_output_paths(root):
+        if session_id and sess_id != session_id:
+            continue
+        try:
+            media_wlc_validate_id(sess_id, "session_id")
+            media_wlc_session_row(sess_id)
+            results.append(media_wlc_process_terminal_output(session_id=sess_id, output_path=output_path))
+        except HTTPException as exc:
+            results.append({"session_id": sess_id, "name": output_path.name, "state": "error", "detail": str(exc.detail)})
+        except Exception as exc:  # noqa: BLE001 - keep one bad transcript from blocking EPC ingest.
+            results.append({"session_id": sess_id, "name": output_path.name, "state": "error", "detail": str(exc)})
     return results
 
 
@@ -5509,12 +5923,14 @@ def media_wlc_ingest_scan(*, session_id: str | None = None) -> dict[str, Any]:
         results.append(outcome)
     handled_ids = {item.get("artifact_id") for item in results if item.get("artifact_id")}
     retried = media_wlc_retry_promoted_artifacts(session_id=session_id, exclude_artifact_ids=handled_ids)
+    transcripts = media_wlc_transcript_scan(session_id=session_id)
     return {
         "ok": True,
         "scanned": len(results),
         "retried": len(retried),
+        "transcripts": len(transcripts),
         "stability_seconds": stability_seconds,
-        "results": results + retried,
+        "results": results + retried + transcripts,
     }
 
 
