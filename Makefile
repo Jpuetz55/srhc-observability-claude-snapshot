@@ -1,4 +1,4 @@
-.PHONY: help validate plan deploy release status mimir-install mimir-health dashboard-sync-prod-to-dev test test-rf-validation test-pcap-study kustomize-validate wireless-rf-textfile-install wireless-rf-parse wireless-rf-verify-parse wireless-rf-status wireless-rf-smoke-test vocera-dashboard-audit wireless-rf-web wireless-badge-collect wireless-badge-parse wireless-badge-web wireless-rf-install-textfile wireless-rf-install-hourly path-probe-run path-probe-install vocera-survey-refresh vocera-survey-rollback ipad-rf-validation-run ipad-rf-validation-process vocera-media-qoe-parse vocera-media-qoe-dnac-download vocera-media-qoe-dnac-check-api vocera-media-qoe-wlc-attempt-init vocera-media-qoe-wlc-attempt-record vocera-media-qoe-wlc-attempt-validate vocera-media-qoe-wlc-attempt-ingest vocera-media-qoe-wlc-attempt-report vocera-media-qoe-wlc-attempt-list vocera-media-qoe-wlc-session-init vocera-media-qoe-wlc-session-mark vocera-media-qoe-wlc-session-report vocera-media-qoe-wlc-session-list vocera-media-qoe-publish vocera-media-qoe-install vocera-media-qoe-wlc-session-ingest-install vocera-media-qoe-postgres-install vocera-media-qoe-install-db vocera-media-qoe-emit-sql vocera-media-qoe-load-db vocera-media-qoe-data-audit vocera-iperf-qoe-parse vocera-iperf-qoe-install vocera-rf-validation-postgres-install vocera-rf-validation-install-db vocera-rf-validation-study vocera-rf-validation-study-web vocera-rf-validation-study-web-install vocera-rf-validation-parse-badge vocera-rf-validation-inspect-ekahau vocera-rf-validation-parse-ekahau vocera-rf-validation-manual-template vocera-rf-validation-correlate vocera-rf-validation-emit-sql vocera-rf-validation-load-db vocera-rf-validation-all vocera-rf-validation-test topology-postgres-install topology-validate topology-publish topology-publish-dnac topology-load topology-load-poc topology-load-dnac topology-load-dry-run topology-publish-load topology-publish-load-dnac study-web-frontend-build vocera-rf-validation-study-web-legacy
+.PHONY: help validate plan deploy release status mimir-install mimir-health dashboard-sync-prod-to-dev test test-rf-validation test-pcap-study kustomize-validate wireless-rf-textfile-install wireless-rf-parse wireless-rf-verify-parse wireless-rf-status wireless-rf-smoke-test vocera-dashboard-audit wireless-rf-web wireless-badge-collect wireless-badge-parse wireless-badge-web wireless-rf-install-textfile wireless-rf-install-hourly path-probe-run path-probe-install vocera-survey-refresh vocera-survey-rollback ipad-rf-validation-run ipad-rf-validation-process vocera-media-qoe-parse vocera-media-qoe-dnac-download vocera-media-qoe-dnac-check-api vocera-media-qoe-wlc-attempt-init vocera-media-qoe-wlc-attempt-record vocera-media-qoe-wlc-attempt-validate vocera-media-qoe-wlc-attempt-ingest vocera-media-qoe-wlc-attempt-report vocera-media-qoe-wlc-attempt-list vocera-media-qoe-wlc-session-init vocera-media-qoe-wlc-session-smoke-init vocera-media-qoe-wlc-session-console vocera-media-qoe-wlc-session-mark vocera-media-qoe-wlc-session-report vocera-media-qoe-wlc-session-list vocera-media-qoe-publish vocera-media-qoe-install vocera-media-qoe-wlc-session-ingest-install vocera-media-qoe-postgres-install vocera-media-qoe-install-db vocera-media-qoe-emit-sql vocera-media-qoe-load-db vocera-media-qoe-data-audit vocera-iperf-qoe-parse vocera-iperf-qoe-install vocera-rf-validation-postgres-install vocera-rf-validation-install-db vocera-rf-validation-study vocera-rf-validation-study-web vocera-rf-validation-study-web-install vocera-rf-validation-parse-badge vocera-rf-validation-inspect-ekahau vocera-rf-validation-parse-ekahau vocera-rf-validation-manual-template vocera-rf-validation-correlate vocera-rf-validation-emit-sql vocera-rf-validation-load-db vocera-rf-validation-all vocera-rf-validation-test topology-postgres-install topology-validate topology-publish topology-publish-dnac topology-load topology-load-poc topology-load-dnac topology-load-dry-run topology-publish-load topology-publish-load-dnac study-web-frontend-build vocera-rf-validation-study-web-legacy
 
 # Ensure the repository root is on PYTHONPATH so `python3 -m ...` module targets
 # and the test scripts resolve the top-level `tools` package from a clean
@@ -79,6 +79,11 @@ COLLECTOR_SCP_USERNAME ?=
 COLLECTOR_SCP_PORT ?= 22
 RING_FILE_COUNT ?= 5
 RING_FILE_SIZE_MB ?= 100
+WLC_CAPTURE_MODE ?= long_reproduction
+WLC_SHORT_VALIDATION_DURATION_SECONDS ?= 90
+WLC_SSH_HOST ?= $(WLC_NAME)
+WLC_SSH_USER ?=
+WLC_SSH_PORT ?= 22
 VOCERA_MULTICAST_POOL ?= 230.230.0.0/20
 V5000_MAC ?=
 V5000_IP ?=
@@ -186,6 +191,8 @@ help:
 	@echo "  make vocera-media-qoe-wlc-attempt-init ATTEMPT_ID=... V5000_MAC=... C1000_MAC=... Create manual WLC attempt package"
 	@echo "  make vocera-media-qoe-wlc-attempt-ingest ATTEMPT_DIR=... Validate/manual-ingest WLC attempt evidence"
 	@echo "  make vocera-media-qoe-wlc-session-init SESSION_ID=... WLC_INTERFACE=... COLLECTOR_HOST=... Create long-running manual WLC session package"
+	@echo "  make vocera-media-qoe-wlc-session-smoke-init SESSION_ID=... Create 90-second WLC EPC smoke package"
+	@echo "  make vocera-media-qoe-wlc-session-console SESSION_DIR=... WLC_SSH_USER=... Open output-recorded manual WLC SSH console"
 	@echo "  make vocera-media-qoe-publish  Parse unprocessed media pcaps and publish latest node_exporter textfile"
 	@echo "  make vocera-media-qoe-install  Install media PCAP QoE textfile systemd service/timer"
 	@echo "  make vocera-media-qoe-postgres-install Install/start media QoE PostgreSQL container"
@@ -259,6 +266,7 @@ test:
 	python3 ./scripts/test_vocera_wlc_attempt.py
 	python3 ./scripts/test_vocera_wlc_session.py
 	python3 ./scripts/test_vocera_wlc_session_ingest.py
+	python3 ./scripts/test_vocera_wlc_session_console.py
 	python3 ./scripts/test_wlc_session_make_safety.py
 	python3 ./scripts/test_vocera_iperf_qoe.py
 	python3 ./scripts/test_vocera_rf_validation.py
@@ -482,6 +490,8 @@ vocera-media-qoe-wlc-session-init:
 		$(if $(strip $(WLC_CAPTURE_NAME)),--capture-name "$(WLC_CAPTURE_NAME)",) \
 		--wlc-interface "$(WLC_INTERFACE)" \
 		--capture-filter-mode "$(CAPTURE_FILTER_MODE)" \
+		--capture-mode "$(WLC_CAPTURE_MODE)" \
+		--short-validation-duration-seconds "$(WLC_SHORT_VALIDATION_DURATION_SECONDS)" \
 		--collector-host "$(COLLECTOR_HOST)" \
 		--collector-scp-username "$(COLLECTOR_SCP_USERNAME)" \
 		--collector-scp-port "$(COLLECTOR_SCP_PORT)" \
@@ -496,6 +506,20 @@ vocera-media-qoe-wlc-session-init:
 		--vocera-multicast-pool "$(VOCERA_MULTICAST_POOL)" \
 		--operator "$(OPERATOR)" \
 		$(if $(filter 1 yes true,$(WLC_SESSION_FORCE)),--force,)
+
+vocera-media-qoe-wlc-session-smoke-init:
+	$(MAKE) vocera-media-qoe-wlc-session-init WLC_CAPTURE_MODE=short_validation WLC_SHORT_VALIDATION_DURATION_SECONDS=90
+
+vocera-media-qoe-wlc-session-console:
+	@test -n "$(SESSION_DIR)" || (echo "Set SESSION_DIR" && exit 1)
+	@test -n "$(WLC_SSH_HOST)" || (echo "Set WLC_SSH_HOST or WLC_NAME" && exit 1)
+	@test -n "$(WLC_SSH_USER)" || (echo "Set WLC_SSH_USER" && exit 1)
+	bash ./scripts/run_vocera_wlc_session_console.sh \
+		--session-dir "$(SESSION_DIR)" \
+		--wlc-host "$(WLC_SSH_HOST)" \
+		--wlc-user "$(WLC_SSH_USER)" \
+		--wlc-port "$(WLC_SSH_PORT)" \
+		--operator "$(OPERATOR)"
 
 vocera-media-qoe-wlc-session-mark:
 	@test -n "$(SESSION_DIR)" || (echo "Set SESSION_DIR" && exit 1)
