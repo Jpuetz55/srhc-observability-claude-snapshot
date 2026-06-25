@@ -172,6 +172,36 @@ MGID   Mode     RX Packets   TX Packets
     require(any(item["evidence_source"] == "ap_mgid_counter" for item in observations), f"missing AP counter observation: {parsed}")
 
 
+def test_transcript_phase_and_attempt_marker() -> None:
+    """Classify generated command-sheet transcript output conservatively."""
+
+    resolved = """
+! Attempt: sess-001-attempt-20260625T120000-abc123
+show clock detail
+show wireless multicast group 230.230.0.5 vlan 684
+show wireless multicast source 0.0.0.0 group 230.230.0.5 vlan 684
+"""
+    active = """
+show wireless multicast group summary
+MGID        Group             Vlan
+4160        230.230.0.5       684
+show monitor capture VOCERA_260625_1200_A1B2 buffer brief
+"""
+    stop = """
+show monitor capture VOCERA_260625_1200_A1B2
+monitor capture VOCERA_260625_1200_A1B2 stop
+monitor capture VOCERA_260625_1200_A1B2 export scp://appsadmin@10.0.128.107//var/lib/vocera-media-qoe/raw/wlc-sessions/study/sess/incoming/sess.pcap
+"""
+    require(wlc_cli.infer_transcript_phase(resolved) == "resolved_group", "resolved group phase should be detected")
+    require(wlc_cli.infer_transcript_phase(active) == "active_event", "active event phase should be detected")
+    require(wlc_cli.infer_transcript_phase(stop) == "capture_stop_export", "stop/export phase should be detected")
+    require(
+        wlc_cli.extract_attempt_ids(resolved) == ["sess-001-attempt-20260625T120000-abc123"],
+        "explicit attempt marker should be extracted",
+    )
+    require(wlc_cli.extract_attempt_ids("! Attempt: <unbound>") == [], "unbound marker must not associate evidence")
+
+
 def main() -> int:
     """Run standalone tests."""
 
@@ -179,6 +209,7 @@ def main() -> int:
     test_multicast_membership_missing()
     test_vlan_context_mismatch_does_not_overwrite_configured_vlan()
     test_ap_mgid_snapshot()
+    test_transcript_phase_and_attempt_marker()
     print("OK: WLC CLI evidence parser tests passed")
     return 0
 
