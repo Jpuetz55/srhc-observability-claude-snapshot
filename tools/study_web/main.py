@@ -5634,13 +5634,13 @@ def _media_wlc_existing_attempt(session_id: str, attempt_id: str | None) -> str 
     return rows[0].get("attempt_id") if rows else None
 
 
-def _media_wlc_snapshot_id(artifact_id: str, attempt_id: str, phase: str) -> str:
-    raw = f"{artifact_id}\x00{attempt_id}\x00{phase}".encode("utf-8")
+def _media_wlc_snapshot_id(artifact_id: str, attempt_id: str, phase: str, block_index: int) -> str:
+    raw = f"{artifact_id}\x00{block_index}\x00{attempt_id}\x00{phase}".encode("utf-8")
     return "wlcsnap_" + hashlib.sha256(raw).hexdigest()[:24]
 
 
-def _media_wlc_observation_id(artifact_id: str, index: int) -> str:
-    raw = f"{artifact_id}\x00observation\x00{index}".encode("utf-8")
+def _media_wlc_observation_id(artifact_id: str, block_index: int, index: int) -> str:
+    raw = f"{artifact_id}\x00block\x00{block_index}\x00observation\x00{index}".encode("utf-8")
     return "wlcobs_" + hashlib.sha256(raw).hexdigest()[:24]
 
 
@@ -5650,11 +5650,12 @@ def media_wlc_store_snapshot(
     session_id: str,
     attempt_id: str,
     phase: str,
+    block_index: int,
     parsed: dict[str, Any],
 ) -> None:
     """Store one high-confidence attempt-scoped WLC snapshot."""
 
-    snapshot_id = _media_wlc_snapshot_id(artifact_id, attempt_id, phase)
+    snapshot_id = _media_wlc_snapshot_id(artifact_id, attempt_id, phase, block_index)
     media_query_one(
         "insert into vocera_media_wlc_snapshots ("
         "snapshot_id, attempt_id, phase, snapshot_time, receiver_ap, receiver_bssid, "
@@ -5724,15 +5725,23 @@ def media_wlc_store_observations(
     session_id: str,
     attempt_id: str | None,
     phase: str,
+    block_index: int,
+    block_id: str,
+    commands: list[str],
     observations: list[dict[str, Any]],
 ) -> int:
     """Store parsed multicast observations, session-scoped unless safely bound."""
 
     count = 0
     for index, observation in enumerate(observations):
-        observation_id = _media_wlc_observation_id(artifact_id, index)
+        observation_id = _media_wlc_observation_id(artifact_id, block_index, index)
         raw = dict(observation)
         raw["artifact_id"] = artifact_id
+        raw["block_id"] = block_id
+        raw["block_index"] = block_index
+        raw["block_observation_index"] = index
+        raw["commands"] = commands
+        raw["phase"] = phase
         media_query_one(
             "insert into vocera_media_multicast_observations ("
             "observation_id, capture_session_id, attempt_id, observed_at, phase, evidence_source, "
@@ -5778,27 +5787,18 @@ def media_wlc_process_terminal_output(*, session_id: str, output_path: Path) -> 
     artifact_id = wlc_ingest.artifact_id_for(session_id, "wlc_terminal_output", output_path.name)
     existing = media_wlc_session_artifact_row(artifact_id)
     sha = wlc_ingest.sha256_file(output_path)
-    if existing and existing.get("sha256") == sha and existing.get("ingest_state") == "parsed":
+    existing_metadata = existing.get("metadata", "") if existing else ""
+    if (
+        existing
+        and existing.get("sha256") == sha
+        and existing.get("ingest_state") == "parsed"
+        and '"transcript_block_parser_version": 2' in existing_metadata
+    ):
         return {"artifact_id": artifact_id, "session_id": session_id, "name": output_path.name,
                 "state": "parsed", "detail": "already parsed"}
 
     text = output_path.read_text(encoding="utf-8", errors="replace")
     session = media_wlc_session_row(session_id)
-    phase = wlc_cli.infer_transcript_phase(text)
-    attempt_candidates = [
-        attempt_id
-        for attempt_id in wlc_cli.extract_attempt_ids(text)
-        if _media_wlc_existing_attempt(session_id, attempt_id)
-    ]
-    attempt_id = attempt_candidates[0] if len(attempt_candidates) == 1 else None
-    association_confidence = "high" if attempt_id else "low"
-    parsed = wlc_cli.parse_wlc_snapshot(
-        text,
-        phase=phase,
-        receiver_mac=session.get("receiver_mac"),
-        sender_mac=session.get("sender_mac"),
-        expected_vlan=int(session.get("configured_vocera_vlan") or 684),
-    )
     metadata_path = output_path.with_suffix(".json")
     recorder_metadata: dict[str, Any] = {}
     if metadata_path.is_file():
@@ -5806,6 +5806,70 @@ def media_wlc_process_terminal_output(*, session_id: str, output_path: Path) -> 
             recorder_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             recorder_metadata = {"metadata_parse_error": "invalid JSON"}
+
+    blocks = wlc_cli.transcript_command_blocks(text)
+    block_summaries: list[dict[str, Any]] = []
+    total_observations = 0
+    high_confidence_attempts: list[str] = []
+
+    for block in blocks:
+        block_index = int(block.get("block_index") or 0)
+        block_id = str(block.get("block_id") or f"block-{block_index:04d}")
+        phase = str(block.get("phase") or "unassigned")
+        commands = [str(command) for command in (block.get("commands") or [])]
+        explicit_attempt_ids = [str(attempt_id) for attempt_id in (block.get("attempt_ids") or [])]
+        existing_attempts = [
+            attempt_id
+            for attempt_id in explicit_attempt_ids
+            if _media_wlc_existing_attempt(session_id, attempt_id)
+        ]
+        attempt_id = existing_attempts[0] if len(explicit_attempt_ids) == 1 and len(existing_attempts) == 1 else None
+        association_confidence = "high" if attempt_id else ("low" if explicit_attempt_ids else "session")
+        parsed = wlc_cli.parse_wlc_snapshot(
+            str(block.get("text") or ""),
+            phase=phase,
+            receiver_mac=session.get("receiver_mac"),
+            sender_mac=session.get("sender_mac"),
+            expected_vlan=int(session.get("configured_vocera_vlan") or 684),
+        )
+        if attempt_id:
+            high_confidence_attempts.append(attempt_id)
+            media_wlc_store_snapshot(
+                artifact_id=artifact_id,
+                session_id=session_id,
+                attempt_id=attempt_id,
+                phase=phase,
+                block_index=block_index,
+                parsed=parsed,
+            )
+            media_wlc_update_attempt_from_snapshot(attempt_id, parsed)
+        observation_count = media_wlc_store_observations(
+            artifact_id=artifact_id,
+            session_id=session_id,
+            attempt_id=attempt_id,
+            phase=phase,
+            block_index=block_index,
+            block_id=block_id,
+            commands=commands,
+            observations=parsed.get("multicast_observations") or [],
+        )
+        total_observations += observation_count
+        block_summaries.append(
+            {
+                "block_id": block_id,
+                "block_index": block_index,
+                "phase": phase,
+                "commands": commands,
+                "attempt_ids": explicit_attempt_ids,
+                "attempt_id": attempt_id,
+                "association_confidence": association_confidence,
+                "observation_count": observation_count,
+                "vocera_group": parsed.get("vocera_group"),
+                "resolved_group_vlan": parsed.get("resolved_group_vlan"),
+                "mgid": parsed.get("mgid"),
+                "receiver_group_member": parsed.get("c1000_group_member"),
+            }
+        )
 
     media_wlc_upsert_artifact(
         artifact_id,
@@ -5821,38 +5885,20 @@ def media_wlc_process_terminal_output(*, session_id: str, output_path: Path) -> 
         parser_status="parsed",
         visibility_class="wlc_cli_evidence",
         metadata={
-            "phase": phase,
-            "attempt_id": attempt_id,
-            "association_confidence": association_confidence,
-            "attempt_candidates": attempt_candidates,
+            "transcript_block_parser_version": 2,
+            "block_count": len(block_summaries),
+            "blocks": block_summaries,
+            "high_confidence_attempt_ids": sorted(set(high_confidence_attempts)),
             "recorder": recorder_metadata,
         },
-    )
-    if attempt_id:
-        media_wlc_store_snapshot(
-            artifact_id=artifact_id,
-            session_id=session_id,
-            attempt_id=attempt_id,
-            phase=phase,
-            parsed=parsed,
-        )
-        media_wlc_update_attempt_from_snapshot(attempt_id, parsed)
-    observation_count = media_wlc_store_observations(
-        artifact_id=artifact_id,
-        session_id=session_id,
-        attempt_id=attempt_id,
-        phase=phase,
-        observations=parsed.get("multicast_observations") or [],
     )
     return {
         "artifact_id": artifact_id,
         "session_id": session_id,
         "name": output_path.name,
         "state": "parsed",
-        "phase": phase,
-        "attempt_id": attempt_id,
-        "association_confidence": association_confidence,
-        "observation_count": observation_count,
+        "block_count": len(block_summaries),
+        "observation_count": total_observations,
     }
 
 
