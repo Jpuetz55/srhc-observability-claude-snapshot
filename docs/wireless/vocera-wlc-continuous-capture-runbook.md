@@ -78,6 +78,14 @@ The recorder must not use input logging (`--log-in` or `--log-io`) and must not
 automate SSH. Password input is not echoed, but anything visibly printed on the
 terminal becomes recorded evidence.
 
+The collector keeps the full `.out` file as one terminal artifact, then parses it
+into command-sheet blocks. Blocks are split at pasted `terminal length 0`
+boundaries and classified independently as `baseline`, `capture_start`,
+`active_event`, `resolved_group`, `capture_stop_export`, `post_failure`,
+`ap_evidence`, `cleanup`, or `unassigned`. Only blocks with an explicit
+`! Attempt: <attempt-id>` marker are automatically attached to an attempt; all
+ambiguous blocks remain session-scoped evidence.
+
 ## Short validation smoke mode
 
 Before a long incident reproduction, create a short-validation session package:
