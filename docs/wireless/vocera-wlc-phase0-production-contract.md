@@ -206,6 +206,31 @@ client can add PostgreSQL advisory locks around individual artifact processing;
 until then, do not add a no-op advisory-lock query that is released before file
 finalization completes.
 
+## Trigger Preflight
+
+Before the timer calls `/api/media-qoe/wlc/sessions/ingest-scan`, the trigger
+must verify:
+
+```text
+local Study Web /api/health responds
+VOCERA_MEDIA_QOE_RAW_DIR exists
+STUDY_WEB_MEDIA_QOE_WLC_SESSION_ROOT exists
+free bytes under the session root >= STUDY_WEB_WLC_INGEST_MIN_FREE_BYTES
+```
+
+Default runtime values:
+
+```text
+VOCERA_MEDIA_QOE_RAW_DIR=/var/lib/vocera-media-qoe/raw
+STUDY_WEB_MEDIA_QOE_WLC_SESSION_ROOT=/var/lib/vocera-media-qoe/raw/wlc-sessions
+STUDY_WEB_WLC_INGEST_LOCK_FILE=/run/vocera-media-qoe/wlc-session-ingest.lock
+STUDY_WEB_WLC_INGEST_MIN_FREE_BYTES=536870912
+```
+
+Preflight failures should emit a concise JSON reason and exit non-zero so
+systemd/journald shows the operational cause without requiring a Python
+traceback.
+
 ## Generic Ingest Isolation
 
 The generic ICAP/imported-PCAP path must never scan:
