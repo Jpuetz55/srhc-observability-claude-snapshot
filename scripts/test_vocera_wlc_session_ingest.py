@@ -410,10 +410,14 @@ def test_systemd_and_trigger_contract() -> None:
     require("run_vocera_wlc_session_ingest.sh" in service, "ingest service should run the trigger script")
     require("ProtectHome=read-only" in service, "ingest service must read the repo under /home while keeping home read-only")
     require("ProtectHome=true" not in service, "ingest service cannot hide /home from its WorkingDirectory")
+    require("RuntimeDirectory=vocera-media-qoe" in service, "ingest service must create the runtime lock directory")
     require("vocera-wlc-continuous-capture-runbook.md" in service, "ingest service documentation should point to the WLC runbook")
     require("vocera-media-dnac-icap-runbook.md" not in service, "ingest service must not point to the unrelated ICAP runbook")
     require("OnUnitActiveSec=1min" in timer, "ingest timer should fire about once a minute")
     require("ingest-scan" in script, "trigger script should poke the ingest-scan endpoint")
+    require("STUDY_WEB_WLC_INGEST_LOCK_FILE" in script, "trigger lock path should be configurable")
+    require("flock -n" in script, "trigger must skip overlapping scans with a non-blocking flock")
+    require("already_running" in script, "overlapping scans should exit cleanly with a structured reason")
     require("sshpass" not in script, "trigger must not use sshpass")
 
     # Timeout ordering: systemd TimeoutStartSec > curl max-time > parser timeout,
