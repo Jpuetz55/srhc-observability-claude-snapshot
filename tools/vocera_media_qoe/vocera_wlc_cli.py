@@ -81,6 +81,53 @@ def _show_blocks(text: str) -> list[tuple[str, str]]:
     return [(command, "\n".join(lines)) for command, lines in blocks]
 
 
+def extract_attempt_ids(text: str) -> list[str]:
+    """Return attempt IDs explicitly visible in a transcript.
+
+    Generated resolved-group sheets include an ``! Attempt: ...`` marker. We use
+    only explicit markers for high-confidence automatic association; otherwise
+    the transcript remains session-level evidence.
+    """
+
+    seen: set[str] = set()
+    attempts: list[str] = []
+    for match in re.finditer(r"(?im)^\s*!\s*Attempt\s*:\s*([A-Za-z0-9_.:-]+)\s*$", text):
+        attempt_id = match.group(1).strip()
+        if attempt_id and attempt_id != "<unbound>" and attempt_id not in seen:
+            attempts.append(attempt_id)
+            seen.add(attempt_id)
+    return attempts
+
+
+def infer_transcript_phase(text: str) -> str:
+    """Classify a terminal transcript by the WLC evidence commands it contains."""
+
+    lowered = text.lower()
+    if "no monitor capture" in lowered or "no ip access-list extended" in lowered:
+        return "cleanup"
+    if "monitor capture" in lowered and " export " in lowered:
+        return "capture_stop_export"
+    if "monitor capture" in lowered and " start" in lowered:
+        return "capture_start"
+    if re.search(r"show\s+capwap\s+mcast\s+mgid", text, flags=re.IGNORECASE):
+        return "ap_evidence"
+    has_group_detail = re.search(
+        r"show\s+wireless\s+multicast\s+(?:group|source)\s+(?!summary\b)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if has_group_detail:
+        return "resolved_group"
+    if re.search(r"show\s+wireless\s+multicast\s+group\s+summary", text, flags=re.IGNORECASE):
+        if re.search(r"show\s+monitor\s+capture\s+\S+\s+buffer\s+brief", text, flags=re.IGNORECASE):
+            return "active_event"
+        if re.search(r"mobility\s+history|show\s+ap\s+multicast\s+mom", text, flags=re.IGNORECASE):
+            return "baseline"
+    if re.search(r"mobility\s+history", text, flags=re.IGNORECASE):
+        return "post_failure"
+    return "unassigned"
+
+
 def _group_detail_blocks(text: str) -> list[str]:
     """Return multicast group/source detail blocks, excluding the summary table."""
 
