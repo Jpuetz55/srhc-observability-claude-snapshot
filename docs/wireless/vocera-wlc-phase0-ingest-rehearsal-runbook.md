@@ -256,6 +256,68 @@ curl -fsS -X POST -H 'content-type: application/json' -d '{}' \
 Re-run the count queries from steps 10–12 and confirm artifacts and captures are
 still exactly one each.
 
+## 15. Complete negative-test matrix
+
+Run these before production timer enablement. Preserve the command output and
+database counts under the session `validation/` directory.
+
+| Test | Expected result |
+| --- | --- |
+| Header-only pcap in `incoming/` | Detected but not finalized until it is stable and valid enough for container checks. |
+| File grows between scans | Stability timer resets; file remains in `incoming/`. |
+| Stable valid pcap | Finalized to service-owned `pcaps/`, registered, parsed. |
+| Invalid magic | Quarantined with `invalid_magic`; no parse. |
+| Truncated pcap after magic | Quarantined or parser-rejected with a clear reason; no silent success. |
+| Same pcap scanned twice | No duplicate file, artifact, capture, or active parser run. |
+| Same content re-uploaded in same session | Duplicate content is linked without creating another capture. |
+| Parser unavailable after finalization | Final file retained, artifact enters retryable state. |
+| Parser restored | Retry uses the same final file and capture identity. |
+| DB unavailable after finalization | Final file retained for later retry; source is not reclassified as generic raw input. |
+| Service restart during scan | No duplicate final artifact after the next scan. |
+| Parallel scan requests | One processor wins; the other exits `already_running` or records retryable/busy state. |
+| Symlink upload | Rejected/quarantined; no target file is trusted. |
+| Hardlink upload | Rejected/quarantined; no target file is trusted. |
+| Upload account modifies final file | Denied by file ownership/mode. |
+| Generic publisher scan | Finds no `wlc-sessions/` or `wlc-attempts/` artifacts. |
+| Timer reboot recovery | Timer resumes; scans remain idempotent. |
+| Disk low | Safe failure with source preserved and no partial final artifact. |
+
+## 16. Rehearsal evidence package
+
+Store these files under:
+
+```text
+$SESSION_DIR/validation/
+```
+
+Required evidence:
+
+```text
+phase0-rehearsal-summary.json
+phase0-rehearsal-summary.md
+scan-01-new.json
+scan-02-changed.json
+scan-03-stable.json
+scan-04-duplicate.json
+scan-05-failure.json
+scan-06-retry.json
+artifact-final.json
+database-counts.txt
+service-journal.txt
+git-revision.txt
+```
+
+The summary must explicitly state whether these invariants passed:
+
+```text
+one stable file -> one final root-owned EPC
+one stable EPC -> one artifact
+one stable EPC -> one capture
+one successful parse -> one successful parser lineage
+retries may create multiple parse-run rows
+retries must not create multiple files/artifacts/captures
+```
+
 ## Acceptance
 
 The rehearsal passes when, with no manual file movement, hashing, or parser
