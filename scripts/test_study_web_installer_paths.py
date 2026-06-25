@@ -57,13 +57,22 @@ def main() -> None:
     require(installer, "Environment=STUDY_WEB_REPO_ROOT=$repo_root", "runtime repository environment")
     require(installer, "ExecStart=\nExecStart=/bin/bash $repo_root/scripts/run_study_web.sh", "override launch command")
     require(installer, "20-grafana-embed.conf", "Grafana drop-in preservation comment")
+    require(installer, "STUDY_WEB_PYTHON_BIN", "explicit Python interpreter override")
+    require(installer, "Study Web requires Python 3.10 or newer", "minimum Python version guard")
+    require(installer, "/usr/bin/python3.11", "supported Python 3.11 candidate")
+    require(installer, "Recreating unsupported virtualenv", "unsupported virtualenv rebuild")
+    require(installer, "Environment=STUDY_WEB_PYTHON_BIN=$study_web_python", "runtime Python environment")
 
     require(wrapper, "default_repo_root=", "self-resolved wrapper checkout")
     require(wrapper, "repo_root=\"${STUDY_WEB_REPO_ROOT:-$default_repo_root}\"", "explicit runtime checkout override")
     if "/home/appsadmin/grafana-mimir-observability" in wrapper:
         raise AssertionError("launch wrapper still hard-codes the retired checkout")
+    require(wrapper, "Study Web requires Python 3.10 or newer", "launcher Python version guard")
+    require(wrapper, "/usr/bin/python3.11", "launcher supported Python 3.11 candidate")
 
     require(docs, "zz-study-web-repo-root.conf", "cutover documentation")
+    require(docs, "Python 3.10 or newer", "Python runtime documentation")
+    require(docs, "STUDY_WEB_PYTHON_BIN", "Python override documentation")
     require(docs, "stale `override.conf`", "stale override explanation")
     require(makefile, "python3 ./scripts/test_study_web_installer_paths.py", "Makefile test target")
 

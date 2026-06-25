@@ -10,7 +10,22 @@ venv_python="${STUDY_WEB_VENV_DIR:-$repo_root/.venv-study-web}/bin/python"
 if [[ -x "$venv_python" ]]; then
   python_bin="$venv_python"
 else
-  python_bin="/usr/bin/python3"
+  # Mirror the installer preference when a venv is absent. Do not silently
+  # select a collector's legacy Python 3.9 default for Python 3.10+ source.
+  python_bin="${STUDY_WEB_PYTHON_BIN:-}"
+  if [[ -z "$python_bin" ]]; then
+    for candidate in /usr/bin/python3.12 /usr/bin/python3.11 /usr/bin/python3.10 /usr/bin/python3; do
+      if [[ -x "$candidate" ]]; then
+        python_bin="$candidate"
+        break
+      fi
+    done
+  fi
+fi
+
+if ! "$python_bin" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
+  echo "ERROR: Study Web requires Python 3.10 or newer; selected $python_bin reports $($python_bin --version 2>&1)." >&2
+  exit 1
 fi
 
 exec "$python_bin" -m uvicorn study_web.main:app \

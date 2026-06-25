@@ -54,7 +54,22 @@ PYTHONPATH=tools python3 -m uvicorn study_web.main:app --host 127.0.0.1 --port 8
 
 The service installer creates the Python virtual environment, installs API
 dependencies, builds the frontend when `npm` is available, installs the systemd
-unit, and can enable/start it:
+unit, and can enable/start it. Study Web requires **Python 3.10 or newer**:
+the backend uses modern union annotations and cannot start under the collector's
+default Python 3.9. The installer prefers `/usr/bin/python3.12`, then
+`/usr/bin/python3.11`, then `/usr/bin/python3.10`, and validates the selection
+before modifying the virtualenv or systemd. Override the interpreter explicitly
+when the host requires it:
+
+```bash
+sudo env STUDY_WEB_PYTHON_BIN=/usr/bin/python3.11 \
+  bash scripts/install_vocera_rf_validation_study_web.sh --install-python-deps --enable --start-now
+```
+
+When `--install-python-deps` finds an unsupported or different-major/minor
+repo-local virtualenv, it rebuilds the default `.venv-study-web` so Python
+wheels are never reused across incompatible interpreter versions.
+
 
 ```bash
 sudo bash scripts/install_vocera_rf_validation_study_web.sh --install-python-deps --enable --start-now

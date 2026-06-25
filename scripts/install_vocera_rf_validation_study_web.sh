@@ -6,6 +6,11 @@ usage() {
 Usage:
   sudo bash scripts/install_vocera_rf_validation_study_web.sh [--enable] [--start-now] [--skip-frontend-build] [--build-frontend] [--install-python-deps]
 
+Environment:
+  STUDY_WEB_PYTHON_BIN  Optional Python interpreter. Must be Python 3.10 or newer.
+                        Defaults to the first available /usr/bin/python3.12,
+                        /usr/bin/python3.11, /usr/bin/python3.10, or python3.
+
 Installs the collector-hosted study workflow web UI systemd unit.
 
 Defaults:
@@ -61,6 +66,53 @@ if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
   exit 1
 fi
 
+# Study Web uses Python 3.10+ syntax (such as ``str | None`` annotations).
+# Validate the interpreter before changing the virtualenv or systemd so a host
+# whose generic python3 is still Python 3.9 fails safely and predictably.
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+resolve_study_web_python() {
+  local candidate
+  local -a candidates=()
+
+  if [[ -n "${STUDY_WEB_PYTHON_BIN:-}" ]]; then
+    candidates=("$STUDY_WEB_PYTHON_BIN")
+  else
+    candidates=(/usr/bin/python3.12 /usr/bin/python3.11 /usr/bin/python3.10 python3)
+  fi
+
+  for candidate in "${candidates[@]}"; do
+    if [[ "$candidate" == */* ]]; then
+      [[ -x "$candidate" ]] || continue
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+    if command -v "$candidate" >/dev/null 2>&1; then
+      command -v "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+require_supported_python() {
+  local python_bin="$1"
+  if ! "$python_bin" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
+    die "Study Web requires Python 3.10 or newer; selected $python_bin reports $($python_bin --version 2>&1). Set STUDY_WEB_PYTHON_BIN to a supported interpreter."
+  fi
+}
+
+python_major_minor() {
+  "$1" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'
+}
+
+study_web_python="$(resolve_study_web_python)"   || die "No Python interpreter was found. Install Python 3.10+ or set STUDY_WEB_PYTHON_BIN."
+require_supported_python "$study_web_python"
+study_web_python_version="$(python_major_minor "$study_web_python")"
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 unit_src="$repo_root/systemd/vocera-rf-validation-study-web.service"
 unit_dst="/etc/systemd/system/vocera-rf-validation-study-web.service"
@@ -84,11 +136,31 @@ if grep -q '@STUDY_WEB_REPO_ROOT@' "$rendered_unit"; then
 fi
 
 if [[ "$install_python_deps" == "1" ]]; then
-  echo "Installing Python dependencies into $venv_dir"
-  python3 -m venv "$venv_dir"
+  venv_python="$venv_dir/bin/python"
+  if [[ -x "$venv_python" ]]; then
+    if ! "$venv_python" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
+      # Rebuild only the default repo-local venv automatically. A custom venv
+      # may belong to another deployment and requires an explicit operator choice.
+      [[ "$venv_dir" == "$repo_root/.venv-study-web" ]]         || die "Existing unsupported virtualenv is outside the default repo path: $venv_dir. Remove it manually or set STUDY_WEB_VENV_DIR to a supported venv."
+      echo "Recreating unsupported virtualenv $venv_dir with $study_web_python ($study_web_python_version)"
+      rm -rf "$venv_dir"
+    elif [[ "$(python_major_minor "$venv_python")" != "$study_web_python_version" ]]; then
+      # Rebuild on major/minor changes so pip never mixes ABI-specific wheels
+      # from the previous interpreter with the selected runtime interpreter.
+      [[ "$venv_dir" == "$repo_root/.venv-study-web" ]]         || die "Existing virtualenv Python differs from selected $study_web_python; rebuild custom venv $venv_dir manually."
+      echo "Recreating virtualenv $venv_dir for Python $study_web_python_version"
+      rm -rf "$venv_dir"
+    fi
+  fi
+
+  echo "Installing Python dependencies into $venv_dir using $study_web_python ($study_web_python_version)"
+  "$study_web_python" -m venv "$venv_dir"
   "$venv_dir/bin/python" -m pip install --upgrade pip
   "$venv_dir/bin/python" -m pip install -r "$requirements"
 else
+  if [[ -x "$venv_dir/bin/python" ]]; then
+    require_supported_python "$venv_dir/bin/python"
+  fi
   echo "Skipping Python dependency installation. Use --install-python-deps if fastapi/uvicorn are not already installed."
 fi
 
@@ -128,6 +200,7 @@ WorkingDirectory=$repo_root
 Environment=PYTHONPATH=$repo_root/tools
 Environment=STUDY_WEB_REPO_ROOT=$repo_root
 Environment=STUDY_WEB_VENV_DIR=$venv_dir
+Environment=STUDY_WEB_PYTHON_BIN=$study_web_python
 Environment=VOCERA_RF_VALIDATION_PSQL_BIN=$repo_root/scripts/vocera_rf_validation_psql_in_container.sh
 Environment=VOCERA_MEDIA_QOE_PSQL_BIN=$repo_root/scripts/vocera_media_qoe_psql_in_container.sh
 Environment=STUDY_WEB_STATIC_DIR=$static_dir
