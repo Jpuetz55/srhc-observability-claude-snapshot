@@ -26,7 +26,7 @@ stop-export.cli
 cleanup.cli
 cli/                                 preserved WLC transcripts when available
 incoming/                            WLC SCP landing area; never final evidence
-pcaps/                               stable, importer-promoted EPC artifacts
+pcaps/                               stable, service-owned finalized EPC artifacts
 ```
 
 `session.json` records study/session identity, WLC, capture name/interface,
@@ -55,14 +55,14 @@ the operator observed; it is not a packet-level causality conclusion.
 ```text
 WLC SCP upload -> incoming/
 stable upload -> validated (container magic + SHA-256)
-validated -> atomically promoted to pcaps/
-pcaps artifact -> registered capture_point=wlc_epc -> parsed or retryable failure
+validated -> copied into root-owned, non-writable pcaps/ evidence
+pcaps artifact -> SHA-256 verified -> registered capture_point=wlc_epc -> parsed or retryable failure
 ```
 
 The artifact record retains file identity, size, SHA-256, ingest state, parser
-state, final path, and retry lineage. A retry must reuse the same promoted file
-and capture record; it must not duplicate an artifact/capture or reclassify the
-EPC as ICAP.
+state, final path, finalization metadata, and retry lineage. A retry must reuse
+the same finalized file and capture record; it must not duplicate an
+artifact/capture or reclassify the EPC as ICAP.
 
 ## Legacy attempt-only package
 
