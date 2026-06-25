@@ -1,51 +1,83 @@
-# Local Mimir VM Deployment
-
-This profile runs Mimir locally on the collectors VM and keeps Prometheus as the 30-day local-retention scraper and rule evaluator.
+# Local Mimir VM deployment and recovery
 
 ## Runtime model
 
-- Mimir listens on `127.0.0.1:9009`.
-- Prometheus remote-writes samples to `http://127.0.0.1:9009/api/v1/push`.
-- Grafana queries Mimir at `http://127.0.0.1:9009/prometheus`.
-- Mimir stores blocks under `/var/lib/prometheus/mimir`.
-- Prometheus stores its 30-day local buffer under `/var/lib/prometheus/local-tsdb`.
-- Prometheus local TSDB is capped at 300GB and remains separate from the longer-term Mimir store.
+The collectors VM runs a single filesystem-backed Mimir instance. Prometheus
+remains the scraper and recording-rule evaluator; it remote-writes the curated
+metric surface to Mimir for Grafana queries.
 
-## First-time install
+| Component | Endpoint / data path |
+| --- | --- |
+| Mimir read/write API | `127.0.0.1:9009` |
+| Prometheus remote write | `http://127.0.0.1:9009/api/v1/push` |
+| Grafana PromQL datasource | `http://127.0.0.1:9009/prometheus` |
+| Mimir data | `/var/lib/prometheus/mimir/` |
+| Prometheus local TSDB | `/var/lib/prometheus/local-tsdb/` |
+
+The current Mimir config is single-node and has `multitenancy_enabled: false`.
+Prometheus has its own capped local TSDB for scrape/rule diagnostics; it is not
+the Mimir store.
+
+## Install or reconcile Mimir
 
 ```bash
 cd /home/appsadmin/grafana-mimir-observability
-sudo bash ./scripts/install_mimir_local_vm.sh
+make mimir-install
+make mimir-health
 ```
 
-The installer uses the existing `prometheus` service account, installs `/usr/local/bin/mimir` if missing, deploys `/etc/mimir/mimir.yaml`, installs `mimir.service`, and starts the service.
-
-The default binary is pinned to Mimir `3.0.6` and verified with SHA-256 before install. Override `MIMIR_VERSION`, `MIMIR_ASSET`, `MIMIR_DOWNLOAD_URL`, and `MIMIR_SHA256` together when intentionally changing versions.
-
-## Cutover
-
-After Mimir is healthy, deploy the repo:
+After a healthy install, bring the repo-managed configuration into alignment:
 
 ```bash
-bash ./scripts/pipeline.sh deploy --allow-dirty
+make plan
+make deploy
 ```
 
-Verify local Mimir:
+Verify both APIs:
 
 ```bash
 curl -fsS http://127.0.0.1:9009/ready
-curl -fsS http://127.0.0.1:9009/prometheus/api/v1/query --data-urlencode 'query=up'
+curl -fsSG http://127.0.0.1:9009/prometheus/api/v1/query \
+  --data-urlencode 'query=up'
 ```
 
-## Prometheus TSDB recovery
+## Safe Prometheus local-TSDB recovery
 
-If `/var/lib/prometheus` is full, export what you need, then delete only the TSDB contents and keep the parent directory owned by Prometheus:
+Use this only when the **Prometheus local TSDB** is corrupt or needs to be
+recreated. It does not repair Mimir and it must not delete Mimir data.
 
-```bash
-sudo systemctl stop prometheus
-sudo find /var/lib/prometheus -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-sudo chown prometheus:prometheus /var/lib/prometheus
-sudo chmod 750 /var/lib/prometheus
-```
+1. Confirm the exact two paths before stopping anything:
 
-Do not start Prometheus with the old service override after clearing the TSDB. Run the repo deploy next so Prometheus starts with `/var/lib/prometheus/local-tsdb` and the 30-day/300GB retention cap.
+   ```bash
+   sudo du -sh /var/lib/prometheus/local-tsdb /var/lib/prometheus/mimir
+   sudo systemctl status prometheus mimir --no-pager -l
+   ```
+
+2. Stop Prometheus only:
+
+   ```bash
+   sudo systemctl stop prometheus
+   ```
+
+3. Remove the contents of **only** the local Prometheus TSDB:
+
+   ```bash
+   sudo test -d /var/lib/prometheus/local-tsdb
+   sudo find /var/lib/prometheus/local-tsdb -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+   sudo chown -R prometheus:prometheus /var/lib/prometheus/local-tsdb
+   ```
+
+4. Start Prometheus and verify rules/scrapes:
+
+   ```bash
+   sudo systemctl start prometheus
+   sudo systemctl status prometheus --no-pager -l
+   curl -fsS http://127.0.0.1:9090/-/ready
+   ```
+
+**Never run a broad delete under `/var/lib/prometheus/`.** In particular, do
+not remove `/var/lib/prometheus/mimir/`; that directory contains Mimir blocks,
+TSDB state, compactor data, ruler storage, and activity logs.
+
+If the repo-managed Prometheus command-line flags or config are suspected to
+be stale, run `make plan` and `make deploy` after the local TSDB is healthy.

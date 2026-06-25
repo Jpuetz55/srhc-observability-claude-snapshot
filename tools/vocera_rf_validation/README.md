@@ -5,6 +5,12 @@ survey timestamps. The available Ekahau JSON is treated as timestamp/location
 context only; Ekahau RSSI/SNR values are entered manually into the generated
 CSV template.
 
+For new work, **Study Web** is the primary operator interface: create/select a
+project and study, import staged evidence, complete manual survey entries, and
+review statistics. This CLI/Make workflow remains the reproducible backend
+path used by Study Web and by controlled batch processing. The current Grafana
+dashboard inventory does not include an RF-validation dashboard.
+
 Workflow:
 
 ```bash

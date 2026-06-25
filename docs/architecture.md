@@ -1,384 +1,201 @@
-# Architecture Overview
+# Architecture overview
 
-This repo is the source of truth for Grafana dashboards, Prometheus rules,
-metric contracts, deployment helpers, and the optional Cisco wireless RF
-observability extension. Runtime systems collect and store telemetry; the repo
-defines how that telemetry is normalized, validated, visualized, and promoted.
+## Purpose and operating model
 
-## System Context
+This repository controls a single collector-hosted observability platform and
+its wireless evidence workflows. It intentionally separates a low-cardinality
+metrics plane from a high-detail investigation plane:
 
-```mermaid
-flowchart LR
-  repo["Git repo\nDashboards, rules, contracts, scripts"]
-  grafana_dev["Grafana DEV\nEditable dashboards"]
-  grafana_prod["Grafana PROD\nProvisioned dashboards"]
-  prometheus["Prometheus\nScrape, 30-day retention, rule evaluation"]
-  mimir["Mimir\nLonger-term metrics backend"]
-  platform["Platform exporters\nKubernetes, node_exporter, Telegraf"]
-    wireless["Wireless collectors\nWLC CLI, Catalyst Center, badge client jobs, path probes"]
+- **Metrics plane:** WLC MDT, node-exporter textfiles, Prometheus recording
+  rules, Mimir, Grafana, and the currently provisioned dashboards.
+- **Investigation plane:** WLC CLI/EPC evidence, PCAP parser artifacts,
+  badge/Ekahau correlation, Study metadata, session archives, and PostgreSQL.
 
-  platform --> prometheus
-  wireless --> prometheus
-  prometheus -->|remote_write| mimir
-  grafana_dev -->|queries| mimir
-  grafana_prod -->|queries| mimir
+Prometheus/Mimir provides stable operational metrics. Files and PostgreSQL
+retain detailed evidence that must not become Prometheus labels.
 
-  grafana_dev -->|export| repo
-  repo -->|validate and promote| grafana_prod
-  repo -->|provision rules and config| prometheus
-  repo -->|provision datasource and dashboards| grafana_prod
-```
-
-## Runtime Deployment Topology
-
-The single-VM profile keeps collection, rule evaluation, storage, and
-visualization on the collectors host. Optional collectors publish normalized
-textfiles or scrape targets; Prometheus records and remote-writes the curated
-metric surface into Mimir; Grafana reads from Mimir and the topology/RF
-PostgreSQL datasources.
-
-```mermaid
-flowchart TB
-  subgraph external["External evidence sources"]
-    k8s["Kubernetes clusters"]
-    wlc["Cisco WLCs"]
-    dnac["Catalyst Center"]
-    ekahau["Ekahau exports"]
-    pcaps["Vocera media pcaps"]
-    wlc_attempts["Manual WLC capture sessions\nEvent markers + EPC ring pcaps"]
-    laptops["Vocera iperf laptops"]
-  end
-
-  subgraph vm["Collectors VM"]
-    subgraph timers["systemd timers and services"]
-      rf_timer["wireless-rf timers"]
-      badge_timer["badge-client timer"]
-      path_timer["path-probe timer"]
-      media_timer["media QoE timer"]
-      iperf_timer["iperf QoE timer"]
-    end
-
-    textfiles["node_exporter textfile collector"]
-    prometheus["Prometheus\nscrape, rules, 30d/300GB local TSDB"]
-    mimir["Mimir\nlonger-term PromQL API"]
-    grafana["Grafana\nDEV and PROD orgs"]
-    topology_db["Topology PostgreSQL"]
-    rf_validation_db["RF validation PostgreSQL"]
-  end
-
-  k8s --> prometheus
-  wlc --> rf_timer
-  dnac --> rf_timer
-  dnac --> badge_timer
-  dnac --> topology_db
-  ekahau --> rf_validation_db
-  pcaps --> media_timer
-  wlc_attempts --> media_timer
-  laptops --> iperf_timer
-  rf_timer --> textfiles
-  badge_timer --> textfiles
-  path_timer --> textfiles
-  media_timer --> textfiles
-  iperf_timer --> textfiles
-  textfiles --> prometheus
-  prometheus -->|remote_write allowlist| mimir
-  grafana -->|PromQL| mimir
-  grafana -->|SQL| topology_db
-  grafana -->|SQL| rf_validation_db
-```
-
-## Runtime Metric Flow
-
-Prometheus is the active scrape and rule-evaluation layer. Mimir is the query
-backend that Grafana uses for dashboards. Local Prometheus retention is capped
-at 30 days/300GB so it behaves like an evaluation buffer, not the durable
-metrics store.
-
-```mermaid
-flowchart TD
-  subgraph sources["Telemetry sources"]
-    kube["Kubernetes and platform metrics"]
-    node["node_exporter textfile metrics"]
-    telegraf["Telegraf Cisco MDT scrape"]
-    wlc["Generated wireless RF .prom files"]
-  end
-
-  subgraph prom["Prometheus"]
-    scrape["Scrape targets"]
-    rules["Recording rules"]
-    contract["Metric contract checks"]
-  end
-
-  subgraph storage["Metrics storage and query"]
-    local_tsdb["30-day local TSDB"]
-    mimir["Local Mimir\n/prometheus API"]
-  end
-
-  subgraph grafana["Grafana"]
-    dashboards["Provisioned and editable dashboards"]
-    alerts["Managed alerting rules"]
-  end
-
-  kube --> scrape
-  node --> scrape
-  telegraf --> scrape
-  wlc --> scrape
-  scrape --> local_tsdb
-  scrape --> rules
-  rules --> local_tsdb
-  local_tsdb -->|remote_write allowlist| mimir
-  contract -. "validates names" .-> rules
-  dashboards -->|PromQL| mimir
-  alerts -->|PromQL| mimir
-```
-
-## Dashboard Promotion Flow
-
-Production Grafana content is intentionally Git-backed and provisioned. DEV is
-editable for iteration; PROD is converged from files after validation.
-
-```mermaid
-sequenceDiagram
-  participant Operator
-  participant Dev as Grafana DEV
-  participant Repo as Git repo
-  participant Checks as Validation scripts
-  participant Prod as Grafana PROD
-
-  Operator->>Dev: Edit dashboards
-  Operator->>Repo: Export DEV dashboards
-  Repo->>Checks: Validate JSON, metrics, rules, contracts
-  Checks-->>Repo: Pass or fail
-  Repo->>Prod: Promote provisioned dashboards, rules, datasource config
-  Prod-->>Operator: Locked-down dashboard baseline
-```
-
-## Repository Control Plane
-
-The repo is the control plane for promotion. `Makefile` exposes stable operator
-commands; scripts hold the implementation; shared libraries keep path and
-credential lookup consistent across export, validation, promotion, and status
-operations.
+## Deployed topology
 
 ```mermaid
 flowchart LR
-  operator["Operator or CI"]
-  make["Makefile targets"]
-  pipeline["scripts/pipeline.sh"]
-  preflight["scripts/preflight.sh"]
-  promote["scripts/promote_repo_to_prod.sh"]
-  export["scripts/export_dashboards.sh"]
-  status["scripts/status.sh"]
-  libs["scripts/lib\npaths, Grafana auth, Python"]
+  wlc["Catalyst 9800 WLC"]
+  telegraf["Telegraf MDT listener\nWLC dial-out mTLS :57000\nPrometheus exposition :9273"]
+  node["node_exporter\ntextfile collector :9100"]
+  prom["Prometheus :9090\nscrape + rules"]
+  mimir["Mimir :9009\nlocal long-retention PromQL"]
+  grafana["Grafana :3000"]
+  study["Study Workflow :8097"]
+  rfdb["RF Validation PostgreSQL :15433"]
+  mediadb["Media QoE PostgreSQL :15434"]
+  topodb["Topology PostgreSQL :15432"]
 
-  repo_state["Repo state\ndashboards, rules, datasources, systemd overrides"]
-  runtime["Runtime host\n/etc, /var/lib/grafana, systemd"]
-  grafana_api["Grafana API"]
-  prom_api["Prometheus/Mimir APIs"]
-
-  operator --> make
-  make --> pipeline
-  make --> export
-  make --> status
-  pipeline --> preflight
-  pipeline --> promote
-  preflight --> repo_state
-  export --> grafana_api
-  promote --> repo_state
-  promote --> runtime
-  promote --> grafana_api
-  status --> repo_state
-  status --> grafana_api
-  status --> prom_api
-  libs -. "sourced by" .-> export
-  libs -. "sourced by" .-> promote
-  libs -. "sourced by" .-> status
-```
-
-## Validation Gate Detail
-
-Validation is intentionally layered. Fast local checks catch malformed JSON and
-metric-contract drift before promotion touches Grafana, Prometheus, or systemd.
-
-```mermaid
-flowchart TD
-  start["make validate or deploy"]
-  dashboard_json["Dashboard JSON checks"]
-  topology_shape["Topology dashboard shape"]
-  metric_contract["Metric contract schema"]
-  promql_refs["Dashboard PromQL metric references"]
-  metric_overlap["Metric name overlap checks"]
-  prom_rules["Prometheus config and rule syntax"]
-  tests["Collector and parser smoke tests"]
-  pass["Promotion allowed"]
-  fail["Stop with file-specific diagnostics"]
-
-  start --> dashboard_json
-  dashboard_json --> topology_shape
-  topology_shape --> metric_contract
-  metric_contract --> promql_refs
-  promql_refs --> metric_overlap
-  metric_overlap --> prom_rules
-  prom_rules --> tests
-  tests --> pass
-  dashboard_json -. failure .-> fail
-  topology_shape -. failure .-> fail
-  promql_refs -. failure .-> fail
-  metric_overlap -. failure .-> fail
-  prom_rules -. failure .-> fail
-  tests -. failure .-> fail
-```
-
-## Wireless Extension Flow
-
-The wireless extension is optional and source-specific. It does not change the
-core Grafana/Mimir workflow; it adds WLC and badge telemetry as another metric
-producer.
-
-```mermaid
-flowchart LR
-  subgraph evidence["Wireless evidence"]
-    cli["WLC CLI output\nAP RF and traffic distribution"]
-    mdt["Cisco MDT client/AP metrics"]
-    dnac["Catalyst Center API\nbadge client detail"]
-    probe_targets["Path probe targets\nAPs, WLCs, badges, servers"]
-    media_pcaps["Vocera media pcaps\nserver-side capture"]
-  end
-
-  subgraph tools["Repo-owned tools"]
-    parser["tools/wireless_rf parser"]
-    collector["Catalyst Center collector"]
-    badge["Badge client collector"]
-    path_probe["Path probe collector"]
-    media_qoe["Vocera media QoE analyzer"]
-    sqlite["SQLite history"]
-    promfile["Prometheus exposition files"]
-  end
-
-  subgraph rules["Prometheus normalization"]
-    rf_rules["RF and DFS rules"]
-    voice_rules["AP voice AC latency rules"]
-    badge_rules["Badge client RUN-state and FT rules"]
-    path_metrics["Path RTT, delay variation, and loss metrics"]
-    media_metrics["Vocera media QoE snapshot metrics"]
-  end
-
-  subgraph views["Grafana views"]
-    rf_dash["AP RF drilldowns"]
-    badge_dash["Vocera badge dashboard"]
-  end
-
-  cli --> parser
-  dnac --> collector
-  dnac --> badge
-  probe_targets --> path_probe
-  media_pcaps --> media_qoe
-  parser --> sqlite
-  parser --> promfile
-  badge --> sqlite
-  badge --> promfile
-  path_probe --> promfile
-  media_qoe --> promfile
-  mdt --> rf_rules
-  mdt --> badge_rules
-  promfile --> rf_rules
-  promfile --> voice_rules
-  promfile --> path_metrics
-  promfile --> media_metrics
-  rf_rules --> rf_dash
-  voice_rules --> badge_dash
-  badge_rules --> badge_dash
-  path_metrics --> badge_dash
-  media_metrics --> badge_dash
-```
-
-## Source-Specific Parser Pattern
-
-Every optional parser follows the same shape: source-specific raw evidence is
-normalized once, low-cardinality metrics go to Prometheus/Mimir, and detailed
-investigation state goes to files or SQL tables.
-
-```mermaid
-flowchart LR
-  raw["Raw source evidence\nCLI, API JSON, pcap, zip, CSV"]
-  parser["Parser module under tools/"]
-  normalized["Normalized artifacts\nJSON, CSV, prom"]
-  history["History store\nSQLite or PostgreSQL"]
-  archive["Run archive ZIP\ninputs, outputs, manifest, log"]
-  textfile["node_exporter textfile"]
-  prometheus["Prometheus rules"]
-  mimir["Mimir"]
-  grafana["Grafana dashboard"]
-
-  raw --> parser
-  parser --> normalized
-  parser --> archive
-  normalized --> textfile
-  normalized --> history
-  textfile --> prometheus
-  prometheus --> mimir
+  wlc -->|"gRPC dial-out + mTLS"| telegraf
+  telegraf --> prom
+  node --> prom
+  prom -->|"remote_write allowlist"| mimir
   mimir --> grafana
-  history --> grafana
+  study --> rfdb
+  study --> mediadb
+  topodb --> grafana
+  rfdb --> grafana
+  mediadb --> grafana
 ```
 
-This boundary keeps dashboard labels stable while preserving raw-enough detail
-for debugging and rollback.
+### Listener, query, and datastore ports
 
-## Semantic Boundaries
-
-| Area | Owned by | Important boundary |
+| Component | Address/port | Role |
 | --- | --- | --- |
-| Dashboard JSON | `grafana/dashboards-*` | DEV exports are editable snapshots; PROD is provisioned from Git. |
-| Datasources and alerting | `grafana/provisioning/` | Stable datasource UIDs are referenced by dashboards and alerting rules. |
-| Prometheus scrape and rules | `prometheus/` | Recording rules are the dashboard-facing metric surface. |
-| Metric contract | `contracts/metric_contract.yaml` | Dashboard PromQL should reference only known raw, recorded, or allowed external metrics. |
-| Platform deploy helpers | `scripts/`, `systemd/`, `mimir/` | Scripts converge the VM runtime from repo state. |
-| Kubernetes scaffold | `deploy/k8s/` | Minimal Kustomize structure for dev/prod overlays. |
-| Wireless parser and collectors | `tools/wireless_rf/` | Source-specific producers; they emit normalized files and metrics for Prometheus. |
-| Path probe collector | `tools/path_probe/` | Measures synthetic RTT, delay variation, and loss; WLC-to-AP probes are round-trip, not one-way AP-to-WLC latency or RTP jitter. |
-| Vocera media QoE analyzer | `tools/vocera_media_qoe/` | Offline pcap analyzer for server-side observed media quality; exact stream identity stays in JSON, not Prometheus labels. |
-| Vocera WLC capture toolkit | `tools/vocera_media_qoe/vocera_wlc_*` | Manual WLC session-package generation, event markers, transcript parsing, artifact validation, attempt/session SQL, and conservative broadcast verdicts. |
+| Telegraf MDT receiver | collector network address `:57000` | WLC-initiated gRPC/mTLS telemetry connection |
+| Telegraf Prometheus endpoint | `127.0.0.1:9273` | Prometheus scrape target |
+| node_exporter | `127.0.0.1:9100` | textfile metrics scrape target |
+| Prometheus | `127.0.0.1:9090` | scrape, rule evaluation, local diagnostics |
+| Mimir HTTP | `127.0.0.1:9009` | Prometheus remote_write and Grafana PromQL |
+| Mimir gRPC | `127.0.0.1:9095` | internal single-node routing |
+| Grafana | host `:3000` | UI and provisioned dashboards |
+| Study Workflow | host `:8097` | RF/media investigation UI/API |
+| Topology PostgreSQL | `127.0.0.1:15432` | local topology datasource |
+| RF Validation PostgreSQL | `127.0.0.1:15433` | RF study datasource |
+| Media QoE PostgreSQL | `127.0.0.1:15434` | media/session evidence datasource |
 
-## Wireless Latency Semantics
+The network-visible MDT listener is distinct from Telegraf's local Prometheus
+endpoint. A successful `curl :9273` proves metric exposition, not the WLC mTLS
+transport.
 
-The dashboard intentionally keeps these concepts separate:
+## Data paths
 
-- AP voice access-category latency comes from WLC traffic-distribution CLI
-  evidence and is recorded as `wireless_ap_voice_latency_*`.
-- Client RUN-state latency comes from Cisco MDT client mobility history and is
-  recorded as `wireless_badge_client_run_state_latency_*`.
-- Legacy roam-duration compatibility metrics are sourced from the same
-  RUN-state latency field and should not be presented as voice handoff
-  interruption, RTP latency, or AP-to-client latency.
-- Path probe latency is active RTT telemetry between infrastructure endpoints.
-  It should not be mixed with AP voice access-category latency, client
-  RUN-state latency, or badge media QoE.
-- Badge-to-badge and badge-to-server latency/jitter require media-stream
-  measurements, such as RTP/vRTP sequence, timestamp, and receiver-arrival
-  analysis.
+### 1. Live WLC MDT
 
-## Operational Responsibilities
-
-```mermaid
-flowchart TB
-  change["Dashboard or rule change"]
-  validate["Run validation\nmake validate / scripts/preflight.sh"]
-  promote["Promote repo state\nmake deploy or release flow"]
-  observe["Observe in Grafana\nquery Mimir"]
-  debug["Debug sources\nPrometheus, textfiles, SQLite, raw WLC evidence"]
-
-  change --> validate
-  validate --> promote
-  promote --> observe
-  observe -->|panel is wrong or empty| debug
-  debug --> change
+```text
+WLC subscriptions 280/290
+  -> WLC gRPC dial-out with mTLS
+  -> Telegraf MDT receiver
+  -> Telegraf :9273
+  -> Prometheus raw metrics + recording rules
+  -> Mimir remote_write allowlist
+  -> WLC Control Plane Grafana dashboard
 ```
 
-## Where To Look Next
+The repository consumes the telemetry. WLC receiver profiles, trustpoints,
+certificates, source addresses, and subscriptions remain network-device
+configuration managed through the network change process.
 
-- `docs/cicd.md` explains dashboard export, validation, promotion, and DEV
-  reseeding.
-- `docs/local-mimir-vm.md` explains the local single-node Mimir profile.
-- `docs/wireless-rf-observability.md` explains WLC RF parsing, badge metrics,
-  and wireless dashboard semantics.
-- `docs/repo-map.md` maps the main directories to their responsibilities.
+### 2. Scheduled low-cardinality textfiles
+
+```text
+RF parser / path probe / laptop iperf / generic PCAP publisher
+  -> generated .prom file
+  -> node_exporter textfile collector :9100
+  -> Prometheus
+  -> Mimir
+```
+
+These services publish bounded health/current-state metrics. Detailed events
+and packet facts remain in files or PostgreSQL.
+
+### 3. Manual WLC EPC capture session
+
+```text
+Study Web or CLI package generator
+  -> session.json + password-free WLC command sheets
+  -> operator runs WLC CLI interactively
+  -> WLC outbound SCP export into session incoming/
+  -> local one-minute ingest timer (when installed/enabled)
+  -> stability check + magic bytes + SHA-256
+  -> atomic promotion into session pcaps/
+  -> capture_point=wlc_epc registration + parser
+  -> Media QoE PostgreSQL / Study Web artifact status
+```
+
+The session lane is isolated from generic media/ICAP discovery. Generic scans
+must exclude `wlc-sessions` and `wlc-attempts`; Study Web rejects generic
+registration of files inside those managed package roots.
+
+### 4. Completed Catalyst Center ICAP PCAP
+
+```text
+read-only Catalyst Center API
+  -> completed ICAP discovery/download
+  -> generic media raw area
+  -> batch parser
+  -> Media QoE PostgreSQL + node-exporter health snapshot
+```
+
+This integration cannot start a capture, deploy settings, or execute device
+commands. A WLC EPC is not an ICAP capture.
+
+### 5. RF validation and topology
+
+```text
+badge/Ekahau input + manual samples -> RF Validation PostgreSQL -> Study Web
+published Network-Topology CSV -> Topology PostgreSQL -> optional Grafana SQL datasource
+```
+
+Topology and RF datasources exist even when the corresponding dashboard is not
+part of the tracked Grafana inventory.
+
+## Runtime services and timers
+
+| Unit or process | Purpose | Important boundary |
+| --- | --- | --- |
+| `mimir.service` | local single-node Mimir | local filesystem storage only |
+| `vocera-rf-validation-study-web.service` | Study Workflow API/UI | no WLC SSH or secret persistence |
+| `vocera-rf-validation-postgres.service` | RF investigation DB | local Podman PostgreSQL |
+| `vocera-media-qoe-postgres.service` | media/session DB | local Podman PostgreSQL |
+| `network-topology-postgres.service` | topology DB | local Podman PostgreSQL |
+| `wireless-rf-textfile.timer` | RF textfile refresh | manual/source-specific evidence only |
+| `wireless-path-probe.timer` | synthetic probe refresh | collector-originated measurement |
+| `vocera-iperf-qoe-textfile.timer` | laptop JSON refresh | uploads are input evidence |
+| `vocera-media-qoe-textfile.timer` | generic ICAP/imported-PCAP publisher | excludes WLC session/attempt trees |
+| `vocera-media-qoe-wlc-session-ingest.timer` | WLC EPC session importer | enable only after Phase 0 rehearsal passes |
+
+Some template units use a historical `/opt/...` checkout while newer units use
+`/home/appsadmin/...`. Treat the **installed** unit and drop-in (`systemctl cat
+<unit>`) as the runtime authority. Before reinstalling a service on a new host,
+normalize its `WorkingDirectory`, `ExecStart`, and `ReadWritePaths` to the
+actual checkout; do not infer it from a documentation example.
+
+## Grafana and dashboard status
+
+Grafana reads metrics from local Mimir. The datasource template sends an
+`X-Scope-OrgID` header, but `mimir-local.yaml` has multitenancy disabled; the
+header does not create a tenant boundary in this profile.
+
+The checked dashboard inventory contains exactly two logical dashboards in both
+DEV and PROD trees:
+
+1. **WLC Control Plane**
+2. **Vocera Iperf QoE**
+
+Media QoE, RF validation, path probe, and topology capabilities are available
+through Study Web, PostgreSQL, parser outputs, and supporting tools. Add a
+Grafana dashboard only through an intentional DEV → repository → PROD change
+and inventory/contract validation.
+
+## Storage and retention boundaries
+
+| Location | Content | Git policy |
+| --- | --- | --- |
+| `/var/lib/prometheus/local-tsdb` | Prometheus local evaluation buffer | operational; never commit |
+| `/var/lib/prometheus/mimir` | Mimir blocks, WAL, compactor data | operational; never commit |
+| `/var/lib/vocera-media-qoe/raw` | ICAP/imported PCAPs and WLC session packages | operational; never commit |
+| `/var/lib/vocera-iperf-qoe/incoming` | laptop-uploaded iperf JSON | operational; never commit |
+| `/var/lib/*/postgres` | Podman PostgreSQL volumes | operational; never commit |
+| repository `data/` | generated local output when used | not a raw evidence store |
+| `/etc/grafana-mimir-observability/secrets` | materialized runtime credentials | never commit |
+
+## Source-control and deployment boundary
+
+The repository's reviewed `main` branch and tags are the source of truth.
+Use the documented branch and validation workflow before deploying runtime
+changes. Repository-hosting changes are separate infrastructure work and must
+not be mixed with an evidence or dashboard deployment. See
+[`private-git-workflow.md`](private-git-workflow.md).
+
+## Operational entry points
+
+- Live MDT health: [`wlc-mdt-telemetry.md`](wlc-mdt-telemetry.md)
+- Study application: [`study-workflow-web-ui.md`](study-workflow-web-ui.md)
+- Intermittent WLC EPC collection: [`wireless/vocera-wlc-continuous-capture-runbook.md`](wireless/vocera-wlc-continuous-capture-runbook.md)
+- Automatic EPC ingest rehearsal: [`wireless/vocera-wlc-phase0-ingest-rehearsal-runbook.md`](wireless/vocera-wlc-phase0-ingest-rehearsal-runbook.md)
+- Completed ICAP processing: [`wireless/vocera-media-dnac-icap-runbook.md`](wireless/vocera-media-dnac-icap-runbook.md)
+- Promotion: [`cicd.md`](cicd.md)

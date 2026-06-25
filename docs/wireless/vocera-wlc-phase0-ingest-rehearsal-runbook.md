@@ -2,32 +2,29 @@
 
 This runbook proves the Phase 0 WLC capture-session EPC ingest state machine end
 to end against a **restored rehearsal database**, before any production
-deployment. It is the gate between merging Phase 0 and pointing the live
-`collectors01` checkout at GitHub.
+deployment. It is the gate between merging the Phase 0 implementation and
+updating the live `collectors01` checkout to the validated source line.
 
-Run it from a **GitHub-backed integration clone** (GitHub is the canonical source
-of truth; the legacy Forgejo/Gitea repo is frozen). Do not run it against
-production data and do not enable the timer on a production host during
-rehearsal.
+Run it from a **non-production integration clone** of this repository. Do not
+run it against production data and do not enable the timer on a production host
+during rehearsal.
 
-Release candidate under test: tag `phase0-rehearsal-rc1` (GitHub `main` at the
-installer-packaging merge). Verify you are on that exact line before starting.
+Record the exact reviewed commit or tag under test before starting. Do not
+assume that an older rehearsal tag still represents the current code line.
 
 ## 0. Prerequisites
 
 - A throwaway PostgreSQL database restored from a recent production dump (the
   "rehearsal DB"). Nothing here should touch production.
-- The GitHub integration clone with `origin` pointing at GitHub:
+- A non-production integration clone on the reviewed candidate line:
 
 ```bash
-cd /home/appsadmin
-git clone git@github.com:Jpuetz55/srhc-observability-claude-snapshot.git \
-  srhc-observability-github-integration
-cd srhc-observability-github-integration
-git remote -v                      # origin must be github.com, not Forgejo
+cd /path/to/non-production-integration-clone
+git remote -v
 git fetch origin --prune --tags
 git switch main && git pull --ff-only
-git describe --tags --exact-match   # expect: phase0-rehearsal-rc1
+git rev-parse HEAD
+git describe --tags --always
 git log -6 --oneline
 ```
 
@@ -234,8 +231,8 @@ launch:
 
 ## After the rehearsal passes
 
-1. Tag/record the validated line (the RC tag already marks the code point).
-2. Point the live `collectors01` deployment checkout at GitHub.
+1. Record the validated commit/tag and the rehearsal results.
+2. Update the live `collectors01` deployment checkout to that validated line.
 3. Install the timer on `collectors01`:
    `make vocera-media-qoe-wlc-session-ingest-install` (omit `--no-enable` to
    enable the one-minute timer).

@@ -110,6 +110,13 @@ but adds a 90-second duration limit. The smoke test validates WLC command
 syntax, SCP export to `incoming/`, automatic collector ingest, parser launch,
 and Study Web artifact status. It is not an intermittent-failure diagnosis.
 
+Before enabling the automatic session-ingest timer on a production collector,
+pass the database and idempotency gate in
+[`vocera-wlc-phase0-ingest-rehearsal-runbook.md`](vocera-wlc-phase0-ingest-rehearsal-runbook.md).
+For a controlled non-production installation, use the installer with
+`WLC_SESSION_INGEST_INSTALL_ARGS=--no-enable`; do not replace the rehearsal with
+a generic ICAP scan or manual movement into `pcaps/`.
+
 ## Long reproduction mode
 
 Use `start-long.cli` for the real intermittent failure reproduction. It has no

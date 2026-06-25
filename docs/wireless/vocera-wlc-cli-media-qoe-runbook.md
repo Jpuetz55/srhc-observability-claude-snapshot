@@ -1,20 +1,19 @@
-# Vocera WLC CLI Media QoE Runbook
+# Legacy short-attempt WLC media evidence runbook
 
-This attempt-only workflow is retained for legacy bundles and short validation
-captures. For intermittent production failures, prefer
-`docs/wireless/vocera-wlc-continuous-capture-runbook.md`, which models one long
-capture session with many timestamped attempts.
+> **Status:** legacy compatibility workflow. For intermittent production
+> failures, use the canonical long-running capture-session workflow in
+> [`vocera-wlc-continuous-capture-runbook.md`](vocera-wlc-continuous-capture-runbook.md).
 
-This workflow is manual by design. The operator enters WLC commands, saves
-transcripts, exports PCAPs, and moves the artifacts to the collector. The repo
-then validates, parses, stores, and summarizes the evidence.
+This workflow creates one self-contained attempt package for a short,
+single-attempt validation. It remains useful when importing older evidence
+bundles, but it does not replace the Study Web session + attempt-marker model.
 
-## Create An Attempt
+## Create a package
 
 ```bash
 make vocera-media-qoe-wlc-attempt-init \
   STUDY_ID=study_v5000_c1000_multicast \
-  ATTEMPT_ID=20260623T143015-attempt-002 \
+  ATTEMPT_ID=20260624T143015-attempt-002 \
   WLC_NAME=SRHC-WLC-40G-SEC \
   V5000_MAC=<V5000_MAC> \
   V5000_IP=<V5000_IP> \
@@ -23,79 +22,52 @@ make vocera-media-qoe-wlc-attempt-init \
   VOCERA_VLAN=684
 ```
 
-The generated package contains command sheets, `manifest.json`,
-`operator-observation.json`, and directories for `cli/`, `pcaps/`, `notes/`,
-and `validation/`.
+The generated tree contains `manifest.json`, command sheets, `cli/`, `pcaps/`,
+`notes/`, and `validation/` directories.
 
-## Collect Evidence
+## Collect manually
 
-Enable terminal logging in the WLC terminal before pasting command sheets.
-
-Run in order:
-
-1. `before.cli`
-2. `epc-start.cli`
-3. Start the V5000 broadcast.
-4. `during.cli`, replacing `<VOCERA_GROUP>` after reading the group summary.
-5. `epc-stop-export.cli`
-6. `after.cli`
-7. `cleanup.cli` if any capture session remains.
-
-Save outputs as:
+Run the generated before/start/during/stop-export/after/cleanup sheets from an
+approved interactive WLC terminal. Export the final PCAP by outbound SCP into
+that package's `pcaps/` directory, then preserve terminal output as:
 
 ```text
 cli/before.txt
 cli/during.txt
 cli/after.txt
 pcaps/wlc-epc.pcap
+notes/operator-notes.md
 ```
 
-Update `operator-observation.json` or run:
+Record the observed audio result:
 
 ```bash
 make vocera-media-qoe-wlc-attempt-record \
-  ATTEMPT_DIR=/var/lib/vocera-media-qoe/raw/wlc-attempts/study_v5000_c1000_multicast/20260623T143015-attempt-002 \
+  ATTEMPT_DIR=/var/lib/vocera-media-qoe/raw/wlc-attempts/<study>/<attempt> \
   AUDIO_RESULT=missed \
   ALERT_RESULT=true \
-  OPERATOR_NOTES="C1000 got alert tone but no voice."
+  OPERATOR_NOTES='C1000 received alert tone but no voice.'
 ```
 
-## Ingest
+## Validate and ingest explicitly
 
 ```bash
+make vocera-media-qoe-wlc-attempt-validate \
+  ATTEMPT_DIR=/var/lib/vocera-media-qoe/raw/wlc-attempts/<study>/<attempt>
+
 make vocera-media-qoe-wlc-attempt-ingest \
-  ATTEMPT_DIR=/var/lib/vocera-media-qoe/raw/wlc-attempts/study_v5000_c1000_multicast/20260623T143015-attempt-002
+  ATTEMPT_DIR=/var/lib/vocera-media-qoe/raw/wlc-attempts/<study>/<attempt>
 ```
 
-The ingest writes:
+Ingest writes evidence sidecars, validation report, and import SQL. It can load
+the ledger when the media-QoE database URL is configured. It does not make the
+bundle part of the generic ICAP scan path.
 
-```text
-validation/ingest-report.json
-validation/attempt-import.sql
-pcaps/*.pcap.json
-```
+## Safety rules
 
-When `VOCERA_MEDIA_QOE_DATABASE_URL` is set, the ingest command also loads the
-attempt ledger into PostgreSQL through `VOCERA_MEDIA_QOE_PSQL_BIN`.
-
-## Safety Rules
-
-- Always run `show monitor capture <session>` before start.
-- Always run `no monitor capture <session>` after export.
-- Never leave EPC running after the attempt.
-- Never treat an undecodable or encrypted capture as proof that multicast was absent.
-- Never use AP packet-capture scope changes on shared AP profiles without validating AP impact first.
-
-## Source Basis
-
-Cisco documents the WLC 9800 Vocera flow as multicast group assignment,
-IGMP join tracking, WLC multicast group membership, CAPWAP forwarding to APs,
-and AP forwarding to subscribed clients. The WLC verification chain includes
-`show wireless multicast`, `show ap multicast mom`, group summary/detail, and
-multicast source commands.
-
-References:
-
-- https://www.cisco.com/c/en/us/support/docs/wireless/catalyst-9800-series-wireless-controllers/225171-understand-vocera-broadcast-on-wlc-9800.html
-- https://www.cisco.com/c/en/us/td/docs/wireless/controller/9800/17-14/config-guide/b_wl_17_14_cg/m_embedded_packet_capture.html
-- https://www.cisco.com/c/en/us/td/docs/wireless/controller/9800/17-3/config-guide/b_wl_17_3_cg/m_ap_packet_capture.html
+- Confirm capture status before start and after cleanup.
+- Stop/export/clean up every capture object deliberately.
+- Do not interpret an encrypted/undecodable PCAP as proof that multicast was
+  absent.
+- Do not treat an attempt package as a packet-to-attempt correlation engine.
+- Never place WLC or SCP passwords in generated package files.

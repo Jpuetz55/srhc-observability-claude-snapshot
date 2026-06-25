@@ -1,5 +1,9 @@
 # Study statistics workbench
 
+> **Historical implementation record.** This captures a study-statistics feature
+> change. Current user workflow and operational boundaries are documented in
+> [`docs/study-workflow-web-ui.md`](docs/study-workflow-web-ui.md).
+
 This change makes the RF validation page study-centric and adds manual Ekahau
 sample entry with central-limit statistics.
 

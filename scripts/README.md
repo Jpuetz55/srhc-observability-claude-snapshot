@@ -1,116 +1,97 @@
 # Script Catalog
 
-This directory contains operator entrypoints, validation checks, deployment
-helpers, and source-specific collection utilities. Prefer the `make` targets in
-the repo root for routine work; call scripts directly only when the script usage
-block or a runbook says to do so.
+This directory contains the operational entry points behind the repository’s
+Make targets, deployment workflow, local service installers, and repository
+checks. Prefer a documented `make` target for ordinary work. Invoke a script
+directly only when a runbook names it or when diagnosing that script itself.
 
-## Cleanup Rule
+## Operating rule
 
-Keep scripts only when they are one of these:
+The repository is a **collector-host observability and evidence platform**, not
+a generic dashboard bundle. Scripts therefore fall into three different roles:
 
-- Called by `Makefile`, CI, `scripts/pipeline.sh`, or `scripts/promote_repo_to_prod.sh`.
-- Documented as a manual operator tool in `docs/` or this catalog.
-- Part of a self-contained field bundle, such as `vocera_iperf_laptop_roles_v5/`.
+1. **Promotion and validation**: make the repo-managed local services and the
+   two provisioned dashboards consistent.
+2. **Evidence preparation**: parse files that an operator has already staged or
+   downloaded through a read-only API.
+3. **Investigation support**: generate command packages, session manifests,
+   reports, database loads, and archives. These scripts do not connect to or
+   execute commands on a WLC.
 
-One-off dashboard patchers, local diagnostics, and temporary migration helpers
-should live in an incident note or runbook, not as permanent repo scripts.
+The canonical interfaces are in `Makefile`; use `make help` and the linked
+runbooks in `docs/` before executing an installer on a production collector.
 
-## Core Promotion
+## Promotion and repository checks
 
-- `pipeline.sh` selects `validate`, `plan`, or `deploy` and routes to the
-  canonical implementation.
-- `preflight.sh` runs the local validation gate before deploy or release.
-- `promote_repo_to_prod.sh` converges runtime Prometheus, Mimir, Grafana,
-  datasource, dashboard, and optional collector state from the repo.
-- `release.sh` exports DEV dashboards, commits them, and promotes the result.
-- `status.sh` compares DEV, repo, and PROD dashboard state without writing.
-- `sync_prod_to_dev.sh` and `seed_dev_from_files.sh` reseed editable DEV from
-  the repo-managed PROD baseline.
+| Script | Purpose |
+| --- | --- |
+| `pipeline.sh` | Routes `validate`, `plan`, and `deploy` through the supported promotion flow. |
+| `preflight.sh` | Runs the repository validation gate before deployment/release. |
+| `promote_repo_to_prod.sh` | Converges repo-managed Prometheus, Mimir, Grafana, datasource, dashboard, and eligible collector configuration. |
+| `release.sh` | Exports reviewed DEV dashboard changes, commits them, and promotes the repository state. |
+| `status.sh` | Compares DEV, repository, and PROD dashboard state without writing. |
+| `sync_prod_to_dev.sh`, `seed_dev_from_files.sh` | Reseed the editable DEV environment from the repository/PROD baseline. |
+| `check_dashboards.py` | Validates dashboard JSON structure. |
+| `check_dashboard_inventory.py` | Enforces the intentionally small current dashboard inventory. |
+| `check_dashboard_metric_contract.py` | Compares dashboard PromQL references to the metric contract. |
+| `check_contract_schema.py` | Validates the metric-contract document structure. |
+| `check_metric_name_overlap.py` | Detects conflicting metric-family ownership. |
 
-## Dashboard And Contract Checks
+`check_topology_dashboard.py` and `audit_vocera_dashboard.py` are retained
+validation/audit utilities for optional dashboard work. They do **not** mean a
+Topology or legacy Vocera badge dashboard is currently provisioned.
 
-- `check_dashboards.py` validates dashboard JSON and required dashboard fields.
-- `check_dashboard_inventory.py` validates the intentional retained dashboard
-  set.
-- `check_topology_dashboard.py` validates the Network Topology dashboard shape
-  when that dashboard is present.
-- `check_contract_schema.py` validates the metric contract document structure.
-- `check_dashboard_metric_contract.py` compares dashboard PromQL references to
-  the metric contract.
-- `check_metric_name_overlap.py` catches conflicting metric families.
-- `audit_vocera_dashboard.py` queries Vocera dashboard panel expressions against
-  Mimir for live panel-contract checks.
+## Local service and collector installers
 
-## Export And Runtime Installers
+| Script | Purpose |
+| --- | --- |
+| `install_mimir_local_vm.sh` | Installs/configures the single-node local Mimir service. |
+| `install_network_topology_postgres.sh` | Installs the topology PostgreSQL service on the collector. |
+| `install_vocera_media_qoe_postgres.sh` | Installs the Media QoE PostgreSQL service. |
+| `install_vocera_media_qoe_textfile.sh` | Installs the local generic media-PCAP textfile publisher; its scan excludes WLC session/attempt package roots. |
+| `install_vocera_wlc_session_ingest.sh` | Installs the localhost Study Web trigger and optional one-minute timer that imports stable WLC EPC session SCP uploads. Enable only after the Phase 0 rehearsal runbook passes. |
+| `install_vocera_iperf_qoe_textfile.sh` | Installs the iperf QoE textfile publisher. |
+| `install_vocera_rf_validation_postgres.sh` | Installs RF-validation PostgreSQL support when invoked through the matching Make target. |
+| `install_wireless_rf_textfile.sh` | Installs the parser-only WLC RF evidence textfile timer. |
+| `install_wireless_rf_hourly.sh` | Retained optional installer for the separately configured collection workflow; do not enable it merely because the unit exists. |
+| `install_path_probe_textfile.sh` | Installs a bounded synthetic path-probe timer after a real target config is supplied. |
 
-- `export_dashboards.sh` exports dashboards from Grafana through the API.
-- `export_dev_db_to_repo.sh` stages DEV dashboard snapshots into the repo.
-- `install_mimir_local_vm.sh` installs the local single-node Mimir service.
-- `install_network_topology_postgres.sh` installs the local topology Postgres
-  service used by the Network Topology dashboard.
-- `install_wireless_rf_textfile.sh` installs the parser-only RF textfile timer.
-- `install_wireless_rf_hourly.sh` installs the RF collect-and-publish timer.
-- `install_wireless_badge_hourly.sh` installs badge-client collection on a
-  timer.
-- `install_path_probe_textfile.sh` installs the synthetic path probe timer.
-- `install_vocera_media_qoe_textfile.sh` installs the media pcap QoE publisher.
-- `install_vocera_media_qoe_postgres.sh` installs the local media QoE
-  PostgreSQL history datasource.
-- `vocera_media_qoe_psql_in_container.sh` runs `psql` inside that local media
-  QoE PostgreSQL container.
-- `vocera_media_qoe_data_audit.sh` runs the fixed read-only media QoE data-shape
-  audit (project/capture/stream/classification/health views) for dashboard and
-  UI design; wired as `make vocera-media-qoe-data-audit`.
-- `install_vocera_iperf_qoe_textfile.sh` installs the iperf QoE publisher.
+Read the systemd unit and `/etc/default/...` file created by an installer before
+enabling a timer. A timer parses or publishes staged evidence; it is not
+permission to create a new capture or contact a WLC.
 
-## Collector Utilities
+## Evidence and study support
 
-- `publish_dnac_topology.py` publishes Catalyst Center topology CSVs for the
-  Grafana Node Graph datasource.
-- `run_vocera_media_qoe_textfile.sh` scans local media pcaps, parses captures
-  missing a current cache entry, and publishes the newest capture textfile to
-  node_exporter. It also emits PostgreSQL import SQL and can load capture-time
-  history when `VOCERA_MEDIA_QOE_DATABASE_URL` is set. Each run writes a ZIP
-  archive with inputs, outputs, `manifest.json`, and `logs/run.log`.
-- `run_vocera_survey_refresh.sh` is the hard-coded SRHC operator workflow for
-  the recurring Vocera survey: parse local ICAPs, publish media QoE `.prom`,
-  parse the newest badge diagnostic archive, parse the Ekahau project,
-  regenerate the RF validation JSON/CSV/SQL artifacts, and load RF validation
-  SQL into PostgreSQL unless `VOCERA_SURVEY_RF_LOAD_DB=0`. The media and RF
-  parser steps each emit their own ZIP run archive. Runs also write a job
-  manifest under `data/vocera-rf-validation/out/jobs`.
-- `rollback_vocera_survey_refresh.sh` rolls back one survey refresh run by run
-  id: it removes RF validation rows, removes media QoE rows for pcaps uploaded
-  with that job, and moves the uploaded bundle aside.
-- `vocera_rf_validation/windows/Sync-RfValidationDataAndRun.ps1` is the
-  Windows-side field script for uploading `C:\rf-validation-data\Pcaps`,
-  `survey`, and `badge-log` contents to the collector and rerunning the
-  validation parsers.
-- `topology_psql_in_container.sh` runs `psql` inside the local topology Postgres
-  container when the host does not have a direct client.
-- `verify_wireless_rf_cli_parse.py` compares selected raw WLC CLI values to the
-  generated Prometheus exposition output.
-- `wireless_rf_smoke_test.sh` runs a scoped collect/parse/publish/query RF path
-  test.
-- `wireless_rf_status.sh` inspects collector timers, textfile artifacts, and
-  Prometheus/Mimir query paths for RF metrics.
+- `run_vocera_media_qoe_textfile.sh` parses staged local PCAPs, writes parser
+  outputs and a run archive, and can load Media QoE history into PostgreSQL.
+- `run_vocera_survey_refresh.sh` is an older bundled survey-refresh helper.
+  The Study Web workflow is the primary operator interface for new RF studies;
+  use this script only when its documented input contract fits the task.
+- `rollback_vocera_survey_refresh.sh` rolls back one bundled survey-refresh job.
+- `publish_dnac_topology.py` publishes read-only Catalyst Center topology data
+  into the canonical topology files; loading is a separate step.
+- `topology_psql_in_container.sh`, `vocera_media_qoe_psql_in_container.sh`, and
+  `vocera_rf_validation_psql_in_container.sh` provide containerized `psql`
+  access when a host client is absent.
+- `verify_wireless_rf_cli_parse.py`, `wireless_rf_smoke_test.sh`, and
+  `wireless_rf_status.sh` validate the manual WLC CLI evidence parser path.
 
-## Tests
+The WLC capture-session and short-attempt workflows live mainly in
+`tools/vocera_media_qoe/`. Their Make targets generate packages, command sheets,
+manifests, and reports. The long-session importer is triggered only through the
+local Study Web endpoint by `run_vocera_wlc_session_ingest.sh`; it validates and
+parses a stable file that the WLC has already SCP-pushed. None of these scripts
+automate WLC login, capture creation, export, or SCP password handling.
 
-The `test_*.py` scripts are lightweight repository tests run by `make test`.
-They intentionally avoid a test framework dependency so validation can run on a
-plain VM with Python available.
+## Tests and shared libraries
 
-## Shared Libraries
+`test_*.py` scripts are dependency-light repository checks run by `make test`.
+The small internal `tools/common/` package centralizes reusable config,
+dashboard, file, and Prometheus rendering helpers. Domain-specific parser and
+data-model logic remains in its own tool package.
 
-- `lib/paths.sh` centralizes repo and runtime paths.
-- `lib/grafana_auth.sh` centralizes Grafana token discovery.
-- `lib/python.sh` and `python.sh` centralize the selected Python interpreter.
-
-## Vocera Iperf Laptop Bundle
+## Field bundle
 
 `vocera_iperf_laptop_roles_v5/` is a field bundle for two Windows laptop probes,
-the Linux iperf server endpoint, and the collector SCP ingest directory. The
-bundle is kept together even though individual helper scripts are not called by
-repo automation.
+a Linux iperf endpoint, and collector-side SCP ingest. It is intentionally kept
+as a self-contained operator bundle rather than imported as a service library.
