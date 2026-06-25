@@ -121,7 +121,8 @@ def test_incoming_staging_dir() -> None:
 
     Exporting straight into pcaps/ would let a half-written file look like final
     evidence, so the WLC writes the EPC into incoming/ and the collector only
-    promotes it into pcaps/ once the upload is complete and validated.
+    finalizes it into service-owned pcaps/ evidence once the upload is complete
+    and validated.
     """
 
     with tempfile.TemporaryDirectory() as tmp:
