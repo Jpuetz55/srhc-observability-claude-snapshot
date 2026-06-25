@@ -231,6 +231,38 @@ Preflight failures should emit a concise JSON reason and exit non-zero so
 systemd/journald shows the operational cause without requiring a Python
 traceback.
 
+## Operational Telemetry
+
+Study Web exposes WLC ingest health at:
+
+```text
+GET /api/media-qoe/wlc/ingest/status
+GET /api/media-qoe/wlc/ingest/metrics
+```
+
+The Prometheus-text endpoint intentionally uses only bounded labels:
+
+```text
+vocera_wlc_ingest_artifacts_total{state}
+vocera_wlc_ingest_quarantined_total{reason}
+```
+
+It must not label metrics by session ID, artifact ID, capture ID, filename,
+SHA-256, MAC address, IP address, or study name. Those values belong in
+PostgreSQL and Study Web evidence views, not in time-series labels.
+
+Required health values:
+
+```text
+pending uploads
+oldest pending upload age
+current artifacts by ingest state
+current quarantines by bounded reason
+retry-pending count
+last successful import/parse timestamp
+session-root disk free bytes
+```
+
 ## Generic Ingest Isolation
 
 The generic ICAP/imported-PCAP path must never scan:
