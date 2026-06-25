@@ -185,6 +185,27 @@ capture identity, and parser lineage. Multiple parse-run rows are acceptable
 only when they represent justified retry history; duplicate files, artifacts,
 or captures are not acceptable.
 
+## Concurrency Policy
+
+The systemd trigger must acquire a non-blocking host-level lock before calling
+the local ingest-scan endpoint:
+
+```text
+/run/vocera-media-qoe/wlc-session-ingest.lock
+```
+
+If another pass is running, the trigger exits successfully and logs:
+
+```json
+{"event":"wlc_ingest_scan_skipped","reason":"already_running"}
+```
+
+The application remains idempotent through deterministic artifact IDs, the
+session/SHA unique key, and parser retry lineage. A future persistent database
+client can add PostgreSQL advisory locks around individual artifact processing;
+until then, do not add a no-op advisory-lock query that is released before file
+finalization completes.
+
 ## Generic Ingest Isolation
 
 The generic ICAP/imported-PCAP path must never scan:
