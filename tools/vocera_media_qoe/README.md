@@ -65,7 +65,7 @@ directory. When installed/enabled after rehearsal,
 `vocera-media-qoe-wlc-session-ingest.timer` owns the rest:
 
 ```text
-incoming/ -> stable upload -> pcap validation + SHA-256 -> pcaps/
+incoming/ -> stable upload -> root-owned finalization + SHA-256 -> pcaps/
          -> capture_point=wlc_epc -> parser -> Study Web artifact status
 ```
 
@@ -83,7 +83,8 @@ make vocera-media-qoe-wlc-session-init \
 
 Do not run the generic publisher against session packages or manually move a
 pending file from `incoming/` to `pcaps/`. See
-[`../../docs/wireless/vocera-wlc-continuous-capture-runbook.md`](../../docs/wireless/vocera-wlc-continuous-capture-runbook.md)
+[`../../docs/wireless/vocera-wlc-continuous-capture-runbook.md`](../../docs/wireless/vocera-wlc-continuous-capture-runbook.md),
+[`../../docs/wireless/vocera-wlc-phase0-production-contract.md`](../../docs/wireless/vocera-wlc-phase0-production-contract.md),
 and [`../../docs/wireless/vocera-wlc-phase0-ingest-rehearsal-runbook.md`](../../docs/wireless/vocera-wlc-phase0-ingest-rehearsal-runbook.md).
 
 ## Legacy short attempts
