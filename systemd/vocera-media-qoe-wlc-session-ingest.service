@@ -16,6 +16,7 @@ Environment=STUDY_WEB_INGEST_TIMEOUT=600
 TimeoutStartSec=660
 EnvironmentFile=-/etc/default/vocera-media-qoe-wlc-session-ingest
 ExecStart=/usr/bin/bash scripts/run_vocera_wlc_session_ingest.sh
+RuntimeDirectory=vocera-media-qoe
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=read-only
