@@ -2867,10 +2867,10 @@ def validate_media_raw_file(source_path: str) -> Path:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Capture path must stay under STUDY_WEB_MEDIA_QOE_RAW_DIR.") from exc
 
-    if media_path_under_wlc_sessions(resolved):
+    if media_path_under_wlc_managed(resolved):
         raise HTTPException(
             status_code=400,
-            detail="WLC capture-session files are ingested by the session pipeline, not the generic raw-file path.",
+            detail="WLC capture-session/attempt files are ingested by their own pipelines, not the generic raw-file path.",
         )
 
     if not resolved.is_file():
@@ -3076,7 +3076,10 @@ def media_wlc_defaults() -> dict[str, Any]:
     return {
         "site": wlc.get("site") or config.get("site") or "unknown",
         "wlc_name": wlc.get("wlc_name") or "",
-        "capture_name": wlc.get("capture_name") or "VOCERA_CAPTURE",
+        # Blank by default so the create endpoint generates a unique, WLC-safe
+        # capture name. A static prefill collides on the controller and the
+        # generator fallback would almost never run if the UI sent a fixed value.
+        "capture_name": wlc.get("capture_name") or "",
         "wlc_interface": wlc.get("wlc_interface") or "",
         "capture_filter_mode": wlc.get("capture_filter_mode") or "vocera_pool_control",
         "collector_host": wlc.get("collector_host") or "",
@@ -3123,24 +3126,30 @@ def media_wlc_session_root(*, create: bool = False) -> Path:
     return resolved
 
 
-def media_path_under_wlc_sessions(path: Path) -> bool:
-    """Return True when ``path`` resolves inside the WLC capture-session root.
+WLC_MANAGED_SCAN_DIRS = ("wlc-sessions", "wlc-attempts")
 
-    WLC session packages are owned by the session-aware ingest pipeline, never by
-    the generic raw-file register/scan endpoints, so the two evidence pipelines
-    cannot cross-contaminate: a half-uploaded session EPC must not be parsed by a
-    generic operator action, and a session EPC must not be double-registered.
+
+def media_path_under_wlc_managed(path: Path) -> bool:
+    """Return True when ``path`` resolves inside a WLC-managed package root.
+
+    WLC capture-session (``wlc-sessions``) and capture-attempt (``wlc-attempts``)
+    packages are owned by their own ingest pipelines, never by the generic
+    raw-file register/scan endpoints, so the evidence pipelines cannot
+    cross-contaminate: a half-uploaded session EPC must not be parsed by a
+    generic operator action, and a session/attempt EPC must not be
+    double-registered or mislabeled as ordinary ICAP evidence. This mirrors the
+    batch publisher's DEFAULT_EXCLUDED_SCAN_DIRS so both automated paths agree.
     """
 
     try:
-        root = media_wlc_session_root()
+        root = media_raw_dir()
     except HTTPException:
         return False
     try:
-        path.resolve(strict=False).relative_to(root)
-        return True
+        parts = path.resolve(strict=False).relative_to(root).parts
     except (ValueError, OSError):
         return False
+    return bool(parts) and parts[0] in WLC_MANAGED_SCAN_DIRS
 
 
 def media_wlc_validate_id(value: str, label: str) -> str:
@@ -4098,8 +4107,8 @@ def media_scan_raw_files(study_id: str, *, include_registered: bool, limit: int)
             try:
                 resolved = candidate.resolve(strict=True)
                 resolved.relative_to(root)
-                if media_path_under_wlc_sessions(resolved):
-                    # WLC session packages are owned by the session ingest path.
+                if media_path_under_wlc_managed(resolved):
+                    # WLC session/attempt packages are owned by their own pipelines.
                     continue
                 if not resolved.is_file():
                     continue
@@ -4636,6 +4645,24 @@ def create_study_media_qoe_wlc_session(study_id: str, payload: MediaWlcCaptureSe
     # so controller capture-session names cannot collide across sessions.
     if not (payload.capture_name and payload.capture_name.strip()):
         payload.capture_name = wlc_session.generate_capture_name()
+    # Capture-name collision protection: the same controller capture name in
+    # active use by another non-terminal session would collide on the WLC, so
+    # reject reuse until that session is imported or aborted. The generator above
+    # already avoids this for blank requests; this guards operator-supplied names.
+    name_conflict = media_query_rows(
+        "select session_id from vocera_media_capture_sessions "
+        f"where capture_name = {sql_text(payload.capture_name)} "
+        "and session_state not in ('imported', 'aborted') "
+        "limit 1;"
+    )
+    if name_conflict:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"WLC capture name {payload.capture_name} is already in use by active session "
+                f"{name_conflict[0].get('session_id')}. Choose another or leave it blank to generate one."
+            ),
+        )
     target = media_wlc_session_package_dir(study_id, session_id, create=True)
     args = media_wlc_namespace(study_id, payload, target)
     session = wlc_session.session_payload(args, target)
@@ -5318,8 +5345,128 @@ def media_wlc_process_incoming(
             "state": final_state, "capture_id": capture_id, "parse_run_id": parse.get("parse_run_id")}
 
 
+WLC_INGEST_MAX_RETRIES = 5
+
+
+def media_wlc_retry_one(row: dict[str, str]) -> dict[str, Any]:
+    """Re-drive one promoted-but-unparsed WLC EPC artifact.
+
+    Reuses the existing capture_id when present (never re-imports or duplicates),
+    never moves files, and bounds runaway retries of a deterministically-failing
+    EPC. A parser-lock conflict (409) is transient: the artifact is left
+    retryable for the next tick without burning a retry attempt.
+    """
+
+    artifact_id = row.get("artifact_id") or ""
+    session_id = row.get("capture_session_id") or ""
+    name = row.get("source_name") or ""
+    final_path = row.get("final_path") or ""
+    capture_id = row.get("capture_id") or None
+    try:
+        retry_count = int(row.get("retry_count") or 0)
+    except (TypeError, ValueError):
+        retry_count = 0
+    base = (artifact_id, session_id, "wlc_epc", final_path, name)
+
+    if retry_count >= WLC_INGEST_MAX_RETRIES:
+        return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
+                "state": "failed", "detail": "retry limit reached; manual intervention required"}
+
+    try:
+        validated = media_wlc_validate_session_capture(final_path, subdir=wlc_ingest.PCAPS_SUBDIR)
+    except HTTPException as exc:
+        media_wlc_upsert_artifact(*base, ingest_state="failed",
+                                  error_message=f"Promoted file unavailable for retry: {exc.detail}",
+                                  metadata={"retry_count": retry_count + 1})
+        return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
+                "state": "failed", "detail": "promoted file unavailable"}
+
+    session_rows = media_query_rows(
+        "select study_id from v_vocera_media_capture_sessions "
+        f"where session_id = {sql_text(session_id)};"
+    )
+    study_id = (session_rows[0].get("study_id") if session_rows else None) or default_media_study_id()
+
+    if not capture_id:
+        try:
+            registration = media_register_capture_record(
+                study_id, validated, capture_point="wlc_epc",
+                source_name=name, notes="WLC capture-session EPC auto-ingest (retry).",
+            )
+            capture_id = registration["capture_id"]
+        except HTTPException as exc:
+            media_wlc_upsert_artifact(*base, ingest_state="failed", error_message=str(exc.detail),
+                                      metadata={"retry_count": retry_count + 1})
+            return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
+                    "state": "failed", "detail": str(exc.detail)}
+
+    # Persist the capture_id and keep the artifact retryable so a transient
+    # parser-lock conflict on the parse below does not strand it.
+    media_wlc_upsert_artifact(*base, ingest_state="imported", capture_id=capture_id)
+    try:
+        parse = media_run_capture_parse(capture_id, study_id, validated, requested_by="wlc-session-ingest-retry")
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
+                    "state": "imported", "detail": "parser busy; will retry next tick"}
+        media_wlc_upsert_artifact(*base, ingest_state="failed", capture_id=capture_id, parser_status="failed",
+                                  error_message=str(exc.detail), metadata={"retry_count": retry_count + 1})
+        return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
+                "state": "failed", "detail": str(exc.detail)}
+
+    status = parse.get("status")
+    final_state = "parsed" if status == "complete" else "failed"
+    metadata = {"parse_run_id": parse.get("parse_run_id"), "summary": parse.get("summary")}
+    if final_state == "failed":
+        metadata["retry_count"] = retry_count + 1
+    media_wlc_upsert_artifact(*base, ingest_state=final_state, capture_id=capture_id,
+                              parser_status=status, error_message=parse.get("error"), metadata=metadata)
+    return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
+            "state": final_state, "retried": True, "parse_run_id": parse.get("parse_run_id")}
+
+
+def media_wlc_retry_promoted_artifacts(
+    *,
+    session_id: str | None = None,
+    exclude_artifact_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Re-drive WLC EPC artifacts stuck after promotion (register/parse failed).
+
+    Promotion into pcaps/ happens before registration and parsing, so a transient
+    DB/parser failure leaves the file in pcaps/ -- where the incoming scan never
+    revisits it -- in state imported/failed. Quarantined and parsed artifacts are
+    terminal and are not retried. Artifacts already handled in this same scan pass
+    (``exclude_artifact_ids``) are skipped so they are not retried twice per tick.
+    """
+
+    if not media_execution_enabled():
+        return []
+    skip = exclude_artifact_ids or set()
+    clause = f"and capture_session_id = {sql_text(session_id)} " if session_id else ""
+    rows = media_query_rows(
+        "select artifact_id, capture_session_id, source_name, final_path, capture_id, "
+        "coalesce((metadata->>'retry_count')::int, 0) as retry_count "
+        "from vocera_media_session_artifacts "
+        "where artifact_kind = 'wlc_epc' "
+        "and ingest_state in ('imported', 'failed') "
+        "and final_path is not null "
+        f"{clause}"
+        "order by updated_at asc;"
+    )
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        if row.get("artifact_id") in skip:
+            continue
+        results.append(media_wlc_retry_one(row))
+    return results
+
+
 def media_wlc_ingest_scan(*, session_id: str | None = None) -> dict[str, Any]:
-    """Scan every session package's incoming/ once and ingest stable EPCs."""
+    """Scan every session package's incoming/ once and ingest stable EPCs.
+
+    A second pass re-drives any artifact stranded after promotion so a transient
+    failure recovers automatically without an operator moving files.
+    """
 
     root = media_wlc_session_root()
     stability_seconds = media_wlc_ingest_stability_seconds()
@@ -5360,11 +5507,35 @@ def media_wlc_ingest_scan(*, session_id: str | None = None) -> dict[str, Any]:
             outcome = {"session_id": sess_id, "name": info["name"], "state": "error",
                        "detail": str(exc.detail)}
         results.append(outcome)
-    return {"ok": True, "scanned": len(results), "stability_seconds": stability_seconds, "results": results}
+    handled_ids = {item.get("artifact_id") for item in results if item.get("artifact_id")}
+    retried = media_wlc_retry_promoted_artifacts(session_id=session_id, exclude_artifact_ids=handled_ids)
+    return {
+        "ok": True,
+        "scanned": len(results),
+        "retried": len(retried),
+        "stability_seconds": stability_seconds,
+        "results": results + retried,
+    }
+
+
+def media_require_local_request(request: Request) -> None:
+    """Reject non-loopback callers for filesystem-scanning trigger endpoints.
+
+    Study Web listens on 0.0.0.0, but the ingest scan walks the filesystem and
+    can launch long parser runs, so only the local systemd timer (127.0.0.1 /
+    ::1) may trigger it. The UI never needs to POST here -- it reads artifact
+    status through the GET route while the timer performs the scan.
+    """
+
+    client = request.client
+    host = client.host if client else None
+    if host not in {"127.0.0.1", "::1", "::ffff:127.0.0.1"}:
+        raise HTTPException(status_code=403, detail="The ingest-scan trigger is restricted to local callers.")
 
 
 @app.post("/api/media-qoe/wlc/sessions/ingest-scan")
-def media_qoe_wlc_session_ingest_scan(payload: MediaWlcSessionIngestScan | None = None) -> dict[str, Any]:
+def media_qoe_wlc_session_ingest_scan(request: Request, payload: MediaWlcSessionIngestScan | None = None) -> dict[str, Any]:
+    media_require_local_request(request)
     session_id = payload.session_id if payload else None
     if session_id:
         media_wlc_validate_id(session_id, "session_id")

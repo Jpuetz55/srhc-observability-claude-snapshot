@@ -9,7 +9,11 @@ Type=oneshot
 WorkingDirectory=/home/appsadmin/grafana-mimir-observability
 Environment=STUDY_WEB_INGEST_HOST=127.0.0.1
 Environment=STUDY_WEB_INGEST_PORT=8097
-Environment=STUDY_WEB_INGEST_TIMEOUT=120
+Environment=STUDY_WEB_INGEST_TIMEOUT=600
+# Required ordering so a valid large-EPC parse is never killed mid-flight:
+#   TimeoutStartSec (660) > curl max-time / STUDY_WEB_INGEST_TIMEOUT (600)
+#     > Study Web parser timeout STUDY_WEB_MEDIA_QOE_PARSE_TIMEOUT_SECONDS (480).
+TimeoutStartSec=660
 EnvironmentFile=-/etc/default/vocera-media-qoe-wlc-session-ingest
 ExecStart=/usr/bin/bash scripts/run_vocera_wlc_session_ingest.sh
 NoNewPrivileges=true

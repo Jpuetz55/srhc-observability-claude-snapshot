@@ -124,8 +124,15 @@ When the failure reproduces:
 4. Paste `show wireless multicast group summary` into Study Web and select the active group/VLAN row.
 5. Run `resolved-active-group.cli` and save that transcript.
 6. Run `post-failure.cli`.
-7. Confirm the PCAP landed under the session package.
+7. Confirm the EPC landed under the session package `incoming/` folder. The
+   collector imports it automatically (see *Automatic EPC ingest and isolation*
+   below); no manual move, hash, register, or parse step is required.
 8. Run `cleanup.cli`.
+
+Gather the live group evidence (steps 3-5) **before** `stop-export.cli` whenever
+operationally possible: a dynamic Vocera multicast group can disappear within
+seconds of a broadcast ending, and that group/VLAN/MGID evidence cannot be
+recovered from the controller afterward.
 
 Every session must end with:
 
@@ -139,4 +146,68 @@ If the temporary ACL was configured, cleanup also removes it:
 
 ```text
 no ip access-list extended <temporary-name>
+```
+
+## Automatic EPC ingest and isolation
+
+`stop-export.cli` SCP-pushes the exported EPC into the session package
+`incoming/` folder, never directly into `pcaps/`. A file in `incoming/` means
+"upload in progress or pending validation"; `pcaps/` means "stable, validated
+session evidence".
+
+A one-minute collector timer (`vocera-media-qoe-wlc-session-ingest.timer`) runs
+the import with no operator action:
+
+1. Detect a completed upload (size and mtime unchanged across timer ticks).
+2. Validate the pcap/pcapng container by magic bytes and hash it (SHA-256).
+3. Atomically promote `incoming/<file>` to `pcaps/<file>`.
+4. Register it as a capture with `capture_point=wlc_epc`.
+5. Run the existing media QoE parser once.
+6. Surface status in Study Web (file, size, SHA-256, ingest state, parser
+   result) for the session.
+
+The trigger endpoint (`POST /api/media-qoe/wlc/sessions/ingest-scan`) is
+**localhost-only**: only the local systemd timer may start a scan. The Study Web
+UI reads artifact status through the `GET` route; it never triggers a scan.
+
+### Isolation from the generic ICAP path
+
+The WLC session ingest is the **only** automated path that processes WLC session
+EPCs. The generic Vocera media ICAP pipeline must never re-discover a promoted
+session EPC, or it would be double-parsed and mislabeled as ordinary ICAP
+evidence. Two guards enforce this and must stay in place:
+
+- The batch publisher excludes the WLC package roots from recursive discovery
+  (`DEFAULT_EXCLUDED_SCAN_DIRS = ("wlc-sessions", "wlc-attempts")`), and the
+  textfile service passes `VOCERA_MEDIA_QOE_BATCH_EXCLUDE_DIRS=wlc-sessions,wlc-attempts`.
+- Study Web's generic raw-file register/scan endpoints reject any path under the
+  `wlc-sessions`/`wlc-attempts` roots.
+
+Manual raw-file imports register with the neutral capture point `Imported PCAP`
+(not `ICAP`), reserving `ICAP` for genuine Catalyst Center ICAP captures.
+
+### Capture names
+
+Leave the capture name blank when creating a session; Study Web (and the CLI)
+generate a unique, WLC-safe name (`PREFIX_YYMMDD_HHMM_XXXX`). A static name
+eventually collides on the controller, so Study Web also rejects reuse of a
+capture name by any non-terminal session.
+
+### Recovery
+
+Promotion to `pcaps/` happens before registration and parsing. If a transient
+database or parser error fails the import after promotion, the artifact is left
+in `imported`/`failed` state with its `pcaps/` path recorded, and the same timer
+automatically retries it (reusing the existing capture, never moving files or
+re-importing) until it parses or a bounded retry limit is reached.
+
+### Timeout ordering
+
+A valid large-EPC parse must never be killed mid-flight, so the deployed
+timeouts satisfy:
+
+```text
+systemd TimeoutStartSec (660s)
+  > curl max-time / STUDY_WEB_INGEST_TIMEOUT (600s)
+    > Study Web parser timeout STUDY_WEB_MEDIA_QOE_PARSE_TIMEOUT_SECONDS (480s)
 ```

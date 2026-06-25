@@ -1,4 +1,4 @@
-import type { ApiResult, GrafanaStatusResponse, ManualSamplePayload, MediaCaptureExecuteRequest, MediaCaptureExecuteResponse, MediaCaptureRegisterRequest, MediaCaptureRegisterResponse, MediaDnacCaptureDownloadRequest, MediaDnacCaptureDownloadResponse, MediaDnacCaptureQuery, MediaDnacCapturesResponse, MediaDnacStatusResponse, MediaExecutionStatusResponse, MediaParseRunsResponse, MediaQoeCapturesResponse, MediaQoeDuplicatesResponse, MediaQoeProjectSummaryResponse, MediaQoeStreamReviewPayload, MediaQoeStreamReviewResponse, MediaQoeStreamsResponse, MediaQoeSummaryResponse, MediaRawFilesResponse, MediaWlcAttemptActiveGroupRequest, MediaWlcAttemptOutcomeRequest, MediaWlcAttemptResponse, MediaWlcAttemptsResponse, MediaWlcAttemptStartRequest, MediaWlcDefaultsResponse, MediaWlcSessionCreateRequest, MediaWlcSessionEventRequest, MediaWlcSessionArtifactsResponse, MediaWlcSessionEventResponse, MediaWlcSessionPatchRequest, MediaWlcSessionResponse, MediaWlcSessionsResponse, ProjectPayload, ProjectResponse, ProjectRfDuplicatesResponse, ProjectRfResultsResponse, ProjectsResponse, RfInputFileResponse, RfInputFilesResponse, RfManualEntriesResponse, RfRunBundleResponse, RfRunResponse, RfRunsResponse, RfSummary, RfTimeAlignmentResponse, RunComparisonResponse, RunPayload, SourceType, StringRow, StudiesResponse, StudyPayload, StudyResponse, StudySamplesResponse } from './types'
+import type { ApiResult, GrafanaStatusResponse, ManualSamplePayload, MediaCaptureExecuteRequest, MediaCaptureExecuteResponse, MediaCaptureRegisterRequest, MediaCaptureRegisterResponse, MediaDnacCaptureDownloadRequest, MediaDnacCaptureDownloadResponse, MediaDnacCaptureQuery, MediaDnacCapturesResponse, MediaDnacStatusResponse, MediaExecutionStatusResponse, MediaParseRunsResponse, MediaQoeCapturesResponse, MediaQoeDuplicatesResponse, MediaQoeProjectSummaryResponse, MediaQoeStreamReviewPayload, MediaQoeStreamReviewResponse, MediaQoeStreamsResponse, MediaQoeSummaryResponse, MediaRawFilesResponse, MediaWlcAttemptActiveGroupRequest, MediaWlcAttemptOutcomeRequest, MediaWlcAttemptResponse, MediaWlcAttemptsResponse, MediaWlcAttemptStartRequest, MediaWlcDefaultsResponse, MediaWlcSessionCreateRequest, MediaWlcSessionEventRequest, MediaWlcSessionArtifactsResponse, MediaWlcSessionEventResponse, MediaWlcSessionPatchRequest, MediaWlcSessionResponse, MediaWlcSessionsResponse, ProjectPayload, ProjectResponse, ProjectRfDuplicatesResponse, ProjectRfResultsResponse, ProjectsResponse, RfInputFileResponse, RfInputFilesResponse, RfManualEntriesResponse, RfRunBundleResponse, RfRunResponse, RfRunsResponse, RfSummary, RfTimeAlignmentResponse, RunComparisonResponse, RunPayload, SourceType, StudiesResponse, StudyPayload, StudyResponse, StudySamplesResponse } from './types'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -290,13 +290,6 @@ export function listMediaQoeWlcSessionAttempts(sessionId: string): Promise<Media
 
 export function listMediaQoeWlcSessionArtifacts(sessionId: string): Promise<MediaWlcSessionArtifactsResponse> {
   return request<MediaWlcSessionArtifactsResponse>(`/api/media-qoe/wlc/sessions/${encodeURIComponent(sessionId)}/artifacts`)
-}
-
-export function runMediaQoeWlcSessionIngestScan(sessionId?: string): Promise<{ ok: boolean; scanned: number; results: StringRow[] }> {
-  return request<{ ok: boolean; scanned: number; results: StringRow[] }>(`/api/media-qoe/wlc/sessions/ingest-scan`, {
-    method: 'POST',
-    body: JSON.stringify(sessionId ? { session_id: sessionId } : {})
-  })
 }
 
 export function startMediaQoeWlcAttempt(sessionId: string, payload: MediaWlcAttemptStartRequest = {}): Promise<MediaWlcAttemptResponse> {

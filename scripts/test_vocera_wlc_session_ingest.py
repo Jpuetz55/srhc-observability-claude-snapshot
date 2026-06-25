@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools" / "vocera_media_qoe"))
 
 import vocera_wlc_session_ingest as ingest  # noqa: E402
+import vocera_media_qoe_batch as batch  # noqa: E402
 
 
 def require(condition: bool, message: str) -> None:
@@ -179,6 +180,33 @@ def test_is_within_traversal_guard() -> None:
         require(not ingest.is_within(root, root / ".." / "escape"), "traversal escape is not within root")
 
 
+def test_batch_publisher_excludes_wlc_dirs() -> None:
+    """The generic ICAP batch publisher must never discover WLC packages.
+
+    A promoted session EPC lives under wlc-sessions/<study>/<session>/pcaps/; if
+    the recursive batch scanner found it, the one-minute textfile path would
+    double-parse it and mislabel a WLC EPC as ordinary ICAP evidence.
+    """
+
+    require(batch.DEFAULT_EXCLUDED_SCAN_DIRS == ("wlc-sessions", "wlc-attempts"), "batch must exclude WLC package roots by default")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "icap").mkdir()
+        generic = root / "icap" / "server_span.pcap"
+        generic.write_bytes(_pcap_bytes())
+        (root / "wlc-sessions" / "studyA" / "sess1" / "pcaps").mkdir(parents=True)
+        promoted = root / "wlc-sessions" / "studyA" / "sess1" / "pcaps" / "sess1.pcap"
+        promoted.write_bytes(_pcap_bytes())
+        (root / "wlc-attempts" / "a1").mkdir(parents=True)
+        attempt = root / "wlc-attempts" / "a1" / "x.pcap"
+        attempt.write_bytes(_pcap_bytes())
+
+        require(batch.discover_pcaps(root) == [generic], "default discovery must skip wlc-sessions and wlc-attempts")
+        require(set(batch.discover_pcaps(root, exclude_dirs=())) == {generic, promoted, attempt}, "empty exclude must discover everything")
+        require(batch._parse_exclude_dirs("wlc-sessions, wlc-attempts ") == ("wlc-sessions", "wlc-attempts"), "exclude parsing should trim names")
+        require(batch._parse_exclude_dirs(None) == batch.DEFAULT_EXCLUDED_SCAN_DIRS, "missing exclude env should default to WLC dirs")
+
+
 # ---------------------------------------------------------------------------
 # Text-contract assertions for the Study-Web-owned orchestration and schema.
 # (No fastapi/psql here, so we assert the wiring is present and real.)
@@ -186,23 +214,17 @@ def test_is_within_traversal_guard() -> None:
 
 def test_study_web_ingest_contract() -> None:
     main_text = (ROOT / "tools" / "study_web" / "main.py").read_text(encoding="utf-8")
-    # Generic raw-file path must keep WLC session packages out.
-    require("def media_path_under_wlc_sessions" in main_text, "Study Web should detect WLC session paths")
+    # Generic raw-file path must keep WLC session AND attempt packages out.
+    require('WLC_MANAGED_SCAN_DIRS = ("wlc-sessions", "wlc-attempts")' in main_text, "Study Web must isolate both WLC package roots")
+    require("def media_path_under_wlc_managed" in main_text, "Study Web should detect WLC-managed paths")
     require(
-        "WLC capture-session files are ingested by the session pipeline, not the generic raw-file path." in main_text,
-        "generic raw-file validator must reject WLC session paths",
-    )
-    require(
-        main_text.count("if media_path_under_wlc_sessions(resolved):") >= 2,
-        "both the raw-file validator and the raw scanner must skip WLC session paths",
+        main_text.count("if media_path_under_wlc_managed(resolved):") >= 2,
+        "both the raw-file validator and the raw scanner must skip WLC-managed paths",
     )
     # Shared parser executor reused by both the endpoint and the ingest path.
     require("def media_run_capture_parse(" in main_text, "Study Web should extract a shared parser executor")
     require("def media_register_capture_record(" in main_text, "Study Web should extract a shared capture registrar")
-    require(
-        "return media_run_capture_parse(" in main_text,
-        "the execute endpoint should delegate to the shared parser executor",
-    )
+    require("return media_run_capture_parse(" in main_text, "the execute endpoint should delegate to the shared parser executor")
     require("media_run_capture_parse(capture_id, study_id, validated" in main_text, "WLC ingest must reuse the shared executor")
     # Session-EPC ingest pipeline and endpoints.
     require('capture_point="wlc_epc"' in main_text, "WLC ingest must register captures as wlc_epc")
@@ -211,6 +233,17 @@ def test_study_web_ingest_contract() -> None:
     require("def media_wlc_validate_session_capture(" in main_text, "Study Web should validate session-package captures separately")
     require("wlc_ingest.atomic_move(" in main_text, "ingest must atomically promote incoming/ into pcaps/")
     require("wlc_ingest.looks_like_pcap(" in main_text, "ingest must validate capture containers before import")
+    # Hardening: the scan trigger is localhost-only.
+    require("def media_require_local_request(" in main_text, "the ingest-scan trigger must enforce local-only callers")
+    require("media_require_local_request(request)" in main_text, "the ingest-scan endpoint must call the local-only guard")
+    require('"127.0.0.1", "::1"' in main_text, "the local guard must allow only loopback callers")
+    # Hardening: stranded post-promotion artifacts are retried automatically.
+    require("def media_wlc_retry_promoted_artifacts(" in main_text, "ingest must auto-retry artifacts stranded after promotion")
+    require("retried = media_wlc_retry_promoted_artifacts(" in main_text, "the scan must run the retry pass")
+    require("ingest_state in ('imported', 'failed')" in main_text, "retry must target imported/failed artifacts with a promoted path")
+    # Capture-name collision protection for non-terminal sessions.
+    require("is already in use by active session" in main_text, "Study Web must reject reuse of an active capture name")
+    require("session_state not in ('imported', 'aborted')" in main_text, "capture-name reuse check must scope to non-terminal sessions")
     # Stays password-free and parser-safe.
     require("sshpass" not in main_text and "collector_scp_password" not in main_text, "ingest must not introduce SCP credentials")
 
@@ -227,15 +260,58 @@ def test_session_artifact_schema_contract() -> None:
     require("uq_vocera_media_session_artifacts_session_sha" in schema, "duplicate content imports must be guarded for idempotency")
 
 
+def _env_int(text: str, key: str) -> int:
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith(f"Environment={key}="):
+            return int(line.split("=", 2)[2].strip())
+        if line.startswith(f"{key}="):
+            return int(line.split("=", 1)[1].strip())
+    raise AssertionError(f"{key} not found")
+
+
 def test_systemd_and_trigger_contract() -> None:
     service = (ROOT / "systemd" / "vocera-media-qoe-wlc-session-ingest.service").read_text(encoding="utf-8")
     timer = (ROOT / "systemd" / "vocera-media-qoe-wlc-session-ingest.timer").read_text(encoding="utf-8")
     script = (ROOT / "scripts" / "run_vocera_wlc_session_ingest.sh").read_text(encoding="utf-8")
+    study_web = (ROOT / "systemd" / "vocera-rf-validation-study-web.service").read_text(encoding="utf-8")
     require("Type=oneshot" in service, "ingest service should be a oneshot trigger")
     require("run_vocera_wlc_session_ingest.sh" in service, "ingest service should run the trigger script")
     require("OnUnitActiveSec=1min" in timer, "ingest timer should fire about once a minute")
     require("ingest-scan" in script, "trigger script should poke the ingest-scan endpoint")
     require("sshpass" not in script, "trigger must not use sshpass")
+
+    # Timeout ordering: systemd TimeoutStartSec > curl max-time > parser timeout,
+    # so a valid large-EPC parse is never killed mid-flight.
+    timeout_start = _env_int(service, "TimeoutStartSec")
+    ingest_timeout = _env_int(service, "STUDY_WEB_INGEST_TIMEOUT")
+    parse_timeout = _env_int(study_web, "STUDY_WEB_MEDIA_QOE_PARSE_TIMEOUT_SECONDS")
+    require(
+        timeout_start > ingest_timeout > parse_timeout,
+        f"timeout ordering must hold: TimeoutStartSec({timeout_start}) > ingest({ingest_timeout}) > parser({parse_timeout})",
+    )
+    require('STUDY_WEB_INGEST_TIMEOUT:-600' in script, "trigger curl default should match the aligned ingest timeout")
+
+
+def test_isolation_and_hardening_contract() -> None:
+    textfile_script = (ROOT / "scripts" / "run_vocera_media_qoe_textfile.sh").read_text(encoding="utf-8")
+    textfile_service = (ROOT / "systemd" / "vocera-media-qoe-textfile.service").read_text(encoding="utf-8")
+    config_text = (ROOT / "config" / "vocera-media-qoe.yaml").read_text(encoding="utf-8")
+    main_text = (ROOT / "tools" / "study_web" / "main.py").read_text(encoding="utf-8")
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    media_page = (ROOT / "web" / "study-ui" / "src" / "pages" / "MediaQoeStudy.tsx").read_text(encoding="utf-8")
+    # The generic publisher must receive (and pass) the WLC exclusion list.
+    require("--exclude-dirs" in textfile_script, "textfile wrapper must pass --exclude-dirs to the batch publisher")
+    require("VOCERA_MEDIA_QOE_BATCH_EXCLUDE_DIRS=wlc-sessions,wlc-attempts" in textfile_service, "textfile service must set the WLC exclusion env")
+    # Capture name is blank by default; the server generates a unique one.
+    require('capture_name: ""' in config_text, "config capture_name must be blank so a unique name is generated")
+    require('"capture_name": wlc.get("capture_name") or ""' in main_text, "Study Web defaults must not prefill a static capture name")
+    require("WLC_CAPTURE_NAME ?=\n" in makefile or "WLC_CAPTURE_NAME ?= \n" in makefile, "Makefile WLC capture name must default blank")
+    require("VOCERA_CAPTURE" not in makefile, "Makefile must not default to a static VOCERA_CAPTURE name")
+    require("$(if $(strip $(WLC_CAPTURE_NAME)),--capture-name" in makefile, "Makefile must only pass --capture-name when set")
+    # Generic raw-file imports use a neutral capture point, not ICAP.
+    require("capture_point: 'Imported PCAP'" in media_page, "manual raw-file imports should register as Imported PCAP")
+    require("capture_point: 'ICAP'" not in media_page, "manual raw-file imports must not be mislabeled as ICAP")
 
 
 def main() -> int:
@@ -248,9 +324,11 @@ def main() -> int:
     test_parse_session_rel_and_promoted_path()
     test_artifact_id_is_deterministic_and_scoped()
     test_is_within_traversal_guard()
+    test_batch_publisher_excludes_wlc_dirs()
     test_study_web_ingest_contract()
     test_session_artifact_schema_contract()
     test_systemd_and_trigger_contract()
+    test_isolation_and_hardening_contract()
     print("OK: WLC capture-session ingest tests passed")
     return 0
 

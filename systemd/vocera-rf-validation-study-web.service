@@ -21,7 +21,7 @@ Environment=STUDY_WEB_MEDIA_QOE_MAX_SCAN_FILES=500
 Environment=STUDY_WEB_MEDIA_QOE_MAX_PARSE_BYTES=2147483648
 Environment=STUDY_WEB_MEDIA_QOE_EXECUTION_ENABLED=true
 Environment=STUDY_WEB_MEDIA_QOE_ARCHIVE_ENABLED=false
-Environment=STUDY_WEB_MEDIA_QOE_PARSE_TIMEOUT_SECONDS=300
+Environment=STUDY_WEB_MEDIA_QOE_PARSE_TIMEOUT_SECONDS=480
 Environment=STUDY_WEB_MEDIA_QOE_DNAC_ENV_FILE=/etc/grafana-mimir-observability/secrets/dnac-readonly.env
 Environment=STUDY_WEB_MEDIA_QOE_DNAC_DOWNLOAD_ENABLED=true
 Environment=STUDY_WEB_STATIC_DIR=/home/appsadmin/grafana-mimir-observability/tools/study_web/static

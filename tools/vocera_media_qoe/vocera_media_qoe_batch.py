@@ -22,6 +22,22 @@ from run_archive import create_run_archive
 
 PCAP_SUFFIXES = {".pcap", ".cap", ".pcapng"}
 
+# Directories under the raw root that the generic ICAP batch publisher must
+# never discover. WLC capture-session and capture-attempt packages are owned by
+# their own session/attempt ingest pipelines; letting this recursive scanner
+# also find a promoted session EPC would double-parse it and let the generic
+# "latest capture" textfile/ICAP path treat a WLC EPC as ordinary ICAP evidence.
+DEFAULT_EXCLUDED_SCAN_DIRS = ("wlc-sessions", "wlc-attempts")
+
+
+def _parse_exclude_dirs(value: str | None) -> tuple[str, ...]:
+    """Return a tuple of directory names to exclude from raw-dir discovery."""
+
+    if value is None:
+        return DEFAULT_EXCLUDED_SCAN_DIRS
+    names = tuple(part.strip() for part in value.split(",") if part.strip())
+    return names
+
 
 @dataclass
 class BatchPublishResult:
@@ -123,15 +139,32 @@ def analyzer_config_state(config: qoe.AnalyzerConfig) -> dict[str, Any]:
     }
 
 
-def discover_pcaps(raw_dir: Path) -> list[Path]:
-    """Return supported pcap files in deterministic oldest-to-newest order."""
+def discover_pcaps(
+    raw_dir: Path,
+    *,
+    exclude_dirs: tuple[str, ...] = DEFAULT_EXCLUDED_SCAN_DIRS,
+) -> list[Path]:
+    """Return supported pcap files in deterministic oldest-to-newest order.
+
+    Files inside any ``exclude_dirs`` directory under ``raw_dir`` (by default the
+    WLC ``wlc-sessions`` and ``wlc-attempts`` package roots) are skipped so the
+    generic batch publisher never re-discovers evidence owned by the WLC
+    session/attempt ingest pipelines.
+    """
     if not raw_dir.is_dir():
         return []
-    files = [
-        path
-        for path in raw_dir.rglob("*")
-        if path.is_file() and path.suffix.lower() in PCAP_SUFFIXES
-    ]
+    excluded = {name for name in exclude_dirs if name}
+    files = []
+    for path in raw_dir.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in PCAP_SUFFIXES:
+            continue
+        try:
+            parts = set(path.relative_to(raw_dir).parts)
+        except ValueError:
+            parts = set()
+        if excluded & parts:
+            continue
+        files.append(path)
     return sorted(files, key=lambda path: (path.stat().st_mtime_ns, str(path)))
 
 
@@ -418,15 +451,19 @@ def publish_unparsed_captures(
     archive_label: str | None = None,
     study_id: str | None = None,
     install_db: bool = True,
+    exclude_dirs: tuple[str, ...] = DEFAULT_EXCLUDED_SCAN_DIRS,
 ) -> BatchPublishResult:
     """Parse stale captures, publish the newest cache, and archive the run.
 
     Historical panels read every current per-capture JSON from parsed_dir, but
     node_exporter's textfile collector can expose only one snapshot. The newest
     pcap by mtime is therefore copied to the stable prom/json output paths.
+
+    WLC session/attempt packages under ``exclude_dirs`` are never auto-discovered
+    here; an explicit ``--pcap`` still parses any path on request.
     """
     parsed_dir.mkdir(parents=True, exist_ok=True)
-    captures = [pcap] if pcap is not None else discover_pcaps(raw_dir)
+    captures = [pcap] if pcap is not None else discover_pcaps(raw_dir, exclude_dirs=exclude_dirs)
     captures = [path for path in captures if path.is_file()]
     result = BatchPublishResult(discovered=list(captures))
 
@@ -529,12 +566,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--no-archive", action="store_true", help="Disable per-run ZIP archive creation.")
     parser.add_argument("--force", action="store_true", help="Reparse captures even when their cached state is current.")
     parser.add_argument("--study-id", default=os.environ.get("VOCERA_MEDIA_QOE_STUDY_ID"), help="Optional study_id applied to imported capture rows.")
+    parser.add_argument(
+        "--exclude-dirs",
+        default=os.environ.get("VOCERA_MEDIA_QOE_BATCH_EXCLUDE_DIRS"),
+        help=(
+            "Comma-separated directory names under --raw-dir to skip during recursive "
+            "discovery. Defaults to the WLC session/attempt package roots "
+            f"({','.join(DEFAULT_EXCLUDED_SCAN_DIRS)})."
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint for batch ICAP parsing and publication."""
     args = parse_args(sys.argv[1:] if argv is None else argv)
+    exclude_dirs = _parse_exclude_dirs(args.exclude_dirs)
     archive_dir = None if args.no_archive else Path(args.archive_dir or (Path(args.json_out).parent / "archives"))
     install_db = not args.skip_install_db and os.environ.get("VOCERA_MEDIA_QOE_INSTALL_DB", "1").strip().lower() not in {"0", "false", "no", "off"}
     try:
@@ -558,10 +605,11 @@ def main(argv: list[str] | None = None) -> int:
             archive_label=args.archive_label,
             study_id=args.study_id,
             install_db=install_db,
+            exclude_dirs=exclude_dirs,
         )
     except Exception as exc:
         if archive_dir is not None:
-            failure = BatchPublishResult(discovered=discover_pcaps(Path(args.raw_dir)))
+            failure = BatchPublishResult(discovered=discover_pcaps(Path(args.raw_dir), exclude_dirs=exclude_dirs))
             failure.archive_zip = create_run_archive(
                 archive_dir=archive_dir,
                 workflow="vocera_media_qoe_icap_batch",

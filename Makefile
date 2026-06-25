@@ -65,7 +65,10 @@ ATTEMPT_DIR ?=
 SESSION_ID ?=
 SESSION_DIR ?=
 WLC_NAME ?=
-WLC_CAPTURE_NAME ?= VOCERA_CAPTURE
+# Blank by default so the session CLI generates a unique, WLC-safe capture name
+# (PREFIX_YYMMDD_HHMM_XXXX). A static default eventually collides on the
+# controller and across concurrent sessions.
+WLC_CAPTURE_NAME ?=
 WLC_INTERFACE ?=
 CAPTURE_FILTER_MODE ?= vocera_pool_control
 COLLECTOR_HOST ?=
@@ -473,7 +476,7 @@ vocera-media-qoe-wlc-session-init:
 		--study-id "$(STUDY_ID)" \
 		--session-id "$(SESSION_ID)" \
 		--wlc-name "$(WLC_NAME)" \
-		--capture-name "$(WLC_CAPTURE_NAME)" \
+		$(if $(strip $(WLC_CAPTURE_NAME)),--capture-name "$(WLC_CAPTURE_NAME)",) \
 		--wlc-interface "$(WLC_INTERFACE)" \
 		--capture-filter-mode "$(CAPTURE_FILTER_MODE)" \
 		--collector-host "$(COLLECTOR_HOST)" \

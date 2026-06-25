@@ -8,6 +8,7 @@ After=network-online.target
 Type=oneshot
 WorkingDirectory=/opt/grafana-mimir-observability
 Environment=VOCERA_MEDIA_QOE_RAW_DIR=/var/lib/vocera-media-qoe/raw
+Environment=VOCERA_MEDIA_QOE_BATCH_EXCLUDE_DIRS=wlc-sessions,wlc-attempts
 Environment=VOCERA_MEDIA_QOE_PCAP=
 Environment=VOCERA_MEDIA_QOE_CONFIG=config/vocera-media-qoe.yaml
 Environment=VOCERA_MEDIA_QOE_PROM_OUT=data/vocera-media-qoe/out/vocera_media_qoe.prom
