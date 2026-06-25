@@ -12,6 +12,10 @@ DEFAULT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="${VOCERA_MEDIA_QOE_REPO_ROOT:-$DEFAULT_ROOT}"
 
 RAW_DIR="${VOCERA_MEDIA_QOE_RAW_DIR:-/var/lib/vocera-media-qoe/raw}"
+# WLC session/attempt packages are owned by their own ingest pipelines and must
+# never be auto-discovered by this generic ICAP publisher, or a promoted session
+# EPC would be double-parsed and mislabeled as ordinary ICAP evidence.
+EXCLUDE_DIRS="${VOCERA_MEDIA_QOE_BATCH_EXCLUDE_DIRS:-wlc-sessions,wlc-attempts}"
 PCAP="${VOCERA_MEDIA_QOE_PCAP:-}"
 CONFIG="${VOCERA_MEDIA_QOE_CONFIG:-config/vocera-media-qoe.yaml}"
 PROM_OUT="${VOCERA_MEDIA_QOE_PROM_OUT:-data/vocera-media-qoe/out/vocera_media_qoe.prom}"
@@ -78,6 +82,7 @@ mkdir -p "$(dirname "$PROM_OUT")" "$(dirname "$JSON_OUT")" "$(dirname "$TEXTFILE
 
 args=(
   --raw-dir "$RAW_DIR"
+  --exclude-dirs "$EXCLUDE_DIRS"
   --config "$CONFIG"
   --prom-out "$PROM_OUT"
   --json-out "$JSON_OUT"

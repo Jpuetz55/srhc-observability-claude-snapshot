@@ -388,7 +388,7 @@ export function MediaQoeStudy({ config }: { config: AppConfig }) {
       const response = await registerStudyMediaQoeCapture(selectedStudyId, {
         source_path: file.source_path,
         source_name: file.source_name,
-        capture_point: 'ICAP'
+        capture_point: 'Imported PCAP'
       })
       setSelectedCaptureId(field(response.capture, 'capture_id') || selectedCaptureId)
       setSelectedStreamKey(null)
@@ -413,7 +413,7 @@ export function MediaQoeStudy({ config }: { config: AppConfig }) {
         const response = await registerStudyMediaQoeCapture(selectedStudyId, {
           source_path: file.source_path,
           source_name: file.source_name,
-          capture_point: 'ICAP'
+          capture_point: 'Imported PCAP'
         })
         lastCaptureId = field(response.capture, 'capture_id') || lastCaptureId
       }

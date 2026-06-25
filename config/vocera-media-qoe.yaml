@@ -24,7 +24,9 @@ vocera_multicast:
 
 wlc_capture:
   wlc_name: SRHC-WLC-40G-SEC
-  capture_name: VOCERA_C1000_001
+  # Leave blank so Study Web/CLI generate a unique, WLC-safe capture name per
+  # session. A static name eventually collides on the controller.
+  capture_name: ""
   wlc_interface: Port-channel1
   capture_filter_mode: vocera_pool_control
   vocera_vlan: 684

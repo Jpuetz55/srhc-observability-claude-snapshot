@@ -12,7 +12,7 @@ set -euo pipefail
 
 host="${STUDY_WEB_INGEST_HOST:-127.0.0.1}"
 port="${STUDY_WEB_INGEST_PORT:-${VOCERA_RF_STUDY_WEB_PORT:-8097}}"
-timeout="${STUDY_WEB_INGEST_TIMEOUT:-120}"
+timeout="${STUDY_WEB_INGEST_TIMEOUT:-600}"
 url="http://${host}:${port}/api/media-qoe/wlc/sessions/ingest-scan"
 
 curl -fsS -m "${timeout}" -X POST -H 'content-type: application/json' -d '{}' "${url}"

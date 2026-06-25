@@ -6,7 +6,6 @@ import {
   listMediaQoeWlcSessionArtifacts,
   listMediaQoeWlcSessionAttempts,
   listStudyMediaQoeWlcSessions,
-  runMediaQoeWlcSessionIngestScan,
   setMediaQoeWlcAttemptActiveGroup,
   updateMediaQoeWlcSession
 } from '../api/client'
@@ -391,16 +390,14 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
     }
   }
 
-  const checkForExports = async () => {
-    const sessionId = field(latestRunningSession, 'session_id')
+  const refreshArtifactStatus = async () => {
     setBusy(true)
     setError(null)
     try {
-      const response = await runMediaQoeWlcSessionIngestScan(sessionId || undefined)
-      setMessage(`Ingest scan checked ${response.scanned} incoming upload${response.scanned === 1 ? '' : 's'}.`)
       await refresh()
+      setMessage('Refreshed session EPC artifact status.')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to run session ingest scan')
+      setError(err instanceof Error ? err.message : 'Failed to refresh artifact status')
     } finally {
       setBusy(false)
     }
@@ -634,18 +631,18 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Session EPC artifacts</p>
             <button
               className="rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-200 disabled:opacity-50"
-              disabled={busy || !latestRunningSession}
-              onClick={() => { void checkForExports() }}
+              disabled={busy || loading}
+              onClick={() => { void refreshArtifactStatus() }}
             >
-              Check for exported EPC
+              Refresh status
             </button>
           </div>
           <p className="mt-1 text-xs text-slate-500">
             After <span className="font-mono">stop-export.cli</span> succeeds, the WLC SCP-pushes the EPC into the session
-            <span className="font-mono"> incoming/</span> folder. The collector detects the completed upload, validates and
-            hashes it, promotes it into <span className="font-mono">pcaps/</span>, registers it as a <span className="font-mono">wlc_epc</span>{' '}
-            capture, and parses it automatically — no manual move, hash, register, or parse step. A one-minute timer runs this
-            too; the button just checks immediately.
+            <span className="font-mono"> incoming/</span> folder. A one-minute local timer on the collector detects the
+            completed upload, validates and hashes it, promotes it into <span className="font-mono">pcaps/</span>, registers it
+            as a <span className="font-mono">wlc_epc</span> capture, and parses it automatically — no manual move, hash,
+            register, or parse step. This button just refreshes the displayed status.
           </p>
           <div className="mt-3 overflow-auto rounded-lg border border-slate-800">
             <table className="min-w-full divide-y divide-slate-800 text-sm">
