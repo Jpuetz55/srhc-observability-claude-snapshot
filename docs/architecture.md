@@ -101,7 +101,7 @@ Study Web or CLI package generator
   -> WLC outbound SCP export into session incoming/
   -> local one-minute ingest timer (when installed/enabled)
   -> stability check + magic bytes + SHA-256
-  -> atomic promotion into session pcaps/
+  -> root-owned finalization into session pcaps/
   -> capture_point=wlc_epc registration + parser
   -> Media QoE PostgreSQL / Study Web artifact status
 ```
@@ -109,6 +109,12 @@ Study Web or CLI package generator
 The session lane is isolated from generic media/ICAP discovery. Generic scans
 must exclude `wlc-sessions` and `wlc-attempts`; Study Web rejects generic
 registration of files inside those managed package roots.
+
+The ingest service must not rename upload-owned files into final evidence.
+Final EPCs are copied into service-created temp files, fsynced, owned by
+`root:root`, chmodded non-writable to the SCP account, atomically renamed, and
+hash-verified. The current production gate is documented in
+[`wireless/vocera-wlc-phase0-production-contract.md`](wireless/vocera-wlc-phase0-production-contract.md).
 
 ### 4. Completed Catalyst Center ICAP PCAP
 
@@ -196,6 +202,7 @@ not be mixed with an evidence or dashboard deployment. See
 - Live MDT health: [`wlc-mdt-telemetry.md`](wlc-mdt-telemetry.md)
 - Study application: [`study-workflow-web-ui.md`](study-workflow-web-ui.md)
 - Intermittent WLC EPC collection: [`wireless/vocera-wlc-continuous-capture-runbook.md`](wireless/vocera-wlc-continuous-capture-runbook.md)
+- Phase 0 production ingest contract: [`wireless/vocera-wlc-phase0-production-contract.md`](wireless/vocera-wlc-phase0-production-contract.md)
 - Automatic EPC ingest rehearsal: [`wireless/vocera-wlc-phase0-ingest-rehearsal-runbook.md`](wireless/vocera-wlc-phase0-ingest-rehearsal-runbook.md)
 - Completed ICAP processing: [`wireless/vocera-media-dnac-icap-runbook.md`](wireless/vocera-media-dnac-icap-runbook.md)
 - Promotion: [`cicd.md`](cicd.md)
