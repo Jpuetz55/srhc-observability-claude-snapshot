@@ -28,10 +28,13 @@ preserved implementation and history notes.
   RF validation, read-only ICAP intake, and manual WLC EPC sessions.
 - [`wireless/vocera-wlc-continuous-capture-runbook.md`](wireless/vocera-wlc-continuous-capture-runbook.md)
   — canonical intermittent multicast capture workflow.
+- [`wireless/vocera-wlc-phase0-production-contract.md`](wireless/vocera-wlc-phase0-production-contract.md)
+  — current production contract for WLC SCP staging, root-owned EPC
+  finalization, artifact states, retries, quarantine, and timer enablement.
 - [`wireless/vocera-wlc-phase0-ingest-rehearsal-runbook.md`](wireless/vocera-wlc-phase0-ingest-rehearsal-runbook.md)
   — rehearsal gate for the automatic SCP upload ingest timer.
 - [`wireless/vocera-wlc-capture-transfer.md`](wireless/vocera-wlc-capture-transfer.md)
-  — session `incoming/` staging, automatic promotion, and legacy attempt
+  — session `incoming/` staging, automatic finalization, and legacy attempt
   transfer boundary.
 - [`wireless/vocera-wlc-capture-recovery.md`](wireless/vocera-wlc-capture-recovery.md)
   — safe stop/export/cleanup and ingest recovery.
