@@ -58,6 +58,8 @@ done
 [[ -n "$WLC_HOST" ]] || die "Set --wlc-host"
 [[ -n "$WLC_USER" ]] || die "Set --wlc-user"
 [[ "$WLC_PORT" =~ ^[0-9]+$ ]] || die "--wlc-port must be numeric"
+[[ "$WLC_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "--wlc-host must contain only letters, digits, dots, underscores, or hyphens and must start with a letter or digit"
+[[ "$WLC_USER" =~ ^[A-Za-z_][A-Za-z0-9._-]*$ ]] || die "--wlc-user must contain only letters, digits, dots, underscores, or hyphens and must start with a letter or underscore"
 [[ -f "$SESSION_DIR/session.json" ]] || die "session.json not found under --session-dir"
 [[ -t 0 && -t 1 ]] || die "Run this from an interactive terminal; stdin/stdout must be a TTY"
 
@@ -66,9 +68,10 @@ need_cmd ssh
 need_cmd sha256sum
 need_cmd python3
 
+umask 077
 terminal_dir="$SESSION_DIR/cli/terminal"
 mkdir -p "$terminal_dir"
-chmod 0750 "$terminal_dir"
+chmod 0700 "$terminal_dir"
 
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 base="$terminal_dir/wlc-terminal-$stamp"
@@ -89,14 +92,14 @@ echo "Do not paste secrets into visible command text."
 echo
 
 set +e
-script -q -f -e --log-out "$out_tmp" --log-timing "$timing_tmp" --command "ssh -p $WLC_PORT $WLC_USER@$WLC_HOST"
+script -q -f -e --log-out "$out_tmp" --log-timing "$timing_tmp" --command "ssh -tt -p '$WLC_PORT' '$WLC_USER@$WLC_HOST'"
 exit_code=$?
 set -e
 
 ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 mv "$out_tmp" "$out_file"
 mv "$timing_tmp" "$timing_file"
-chmod 0640 "$out_file" "$timing_file"
+chmod 0600 "$out_file" "$timing_file"
 
 output_sha256="$(sha256sum "$out_file" | awk '{print $1}')"
 timing_sha256="$(sha256sum "$timing_file" | awk '{print $1}')"
@@ -139,7 +142,7 @@ payload = {
 }
 Path(os.environ["meta_file"]).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
-chmod 0640 "$meta_file"
+chmod 0600 "$meta_file"
 
 echo
 echo "Console ended with exit code: $exit_code"
