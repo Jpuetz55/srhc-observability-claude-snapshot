@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pwd
 import re
 import sys
 import uuid
@@ -567,11 +568,64 @@ packet rate during the reproduction window.
 """
 
 
+def incoming_upload_account(session: dict[str, Any]) -> pwd.struct_passwd:
+    """Resolve and validate the local account used by the WLC SCP export."""
+
+    username = str(session.get("collector_scp_username") or "").strip()
+    if not username:
+        raise ValueError("collector_scp_username is required to create an SCP upload directory")
+    try:
+        return pwd.getpwnam(username)
+    except KeyError as exc:
+        raise ValueError(
+            f"collector_scp_username {username!r} is not a local collector account; "
+            "the WLC SCP target user must exist on this host"
+        ) from exc
+
+
+def configure_incoming_upload_dir(incoming: Path, account: pwd.struct_passwd) -> None:
+    """Make the WLC SCP staging directory writable only by its target account.
+
+    Study Web normally runs as root so it can execute the root-owned Podman
+    PostgreSQL helper. The WLC, however, SCP-pushes its EPC as the unprivileged
+    collector account recorded in ``collector_scp_username``. A root-created
+    ``incoming/`` directory at the default 0755 mode is traversable but not
+    writable by that account, which makes the WLC export fail before the ingest
+    pipeline can observe the file. Keep ``pcaps/`` service-owned; only the
+    upload staging directory is delegated to the SCP account.
+    """
+
+    current_uid = os.geteuid()
+    if current_uid not in (0, account.pw_uid):
+        raise PermissionError(
+            f"cannot prepare incoming/ for SCP account {account.pw_name!r} as uid {current_uid}; "
+            "run the package creator as root or as that SCP account"
+        )
+
+    # Restrict upload creation to the configured SCP principal. Root retains
+    # access and later atomically moves the stable file into root-owned pcaps/.
+    incoming.chmod(0o750)
+    if current_uid == 0:
+        os.chown(incoming, account.pw_uid, account.pw_gid)
+
+
 def create_session_package(session: dict[str, Any], target: Path, *, force: bool = False) -> dict[str, Any]:
     """Create a session package and return its manifest."""
 
+    incoming = target / "incoming"
+    # Resolve and authorize the SCP principal before writing package artifacts
+    # so a bad configured username cannot leave a partial package behind.
+    account = incoming_upload_account(session)
+    current_uid = os.geteuid()
+    if current_uid not in (0, account.pw_uid):
+        raise PermissionError(
+            f"cannot prepare incoming/ for SCP account {account.pw_name!r} as uid {current_uid}; "
+            "run the package creator as root or as that SCP account"
+        )
+
     for subdir in ("incoming", "pcaps", "cli", "notes", "validation", "attempts"):
         (target / subdir).mkdir(parents=True, exist_ok=True)
+    configure_incoming_upload_dir(incoming, account)
     files = {
         "session.json": json.dumps(session, indent=2, sort_keys=True),
         "README.md": readme_text(session),

@@ -4666,10 +4666,19 @@ def create_study_media_qoe_wlc_session(study_id: str, payload: MediaWlcCaptureSe
                 f"{name_conflict[0].get('session_id')}. Choose another or leave it blank to generate one."
             ),
         )
-    target = media_wlc_session_package_dir(study_id, session_id, create=True)
+    # Let the package creator create the path only after validating the local
+    # SCP target account. A root-owned Study Web process must delegate only the
+    # incoming/ staging directory to that account; creating the target here
+    # would leave an empty root-owned package behind on validation failure.
+    target = media_wlc_session_package_dir(study_id, session_id, create=False)
     args = media_wlc_namespace(study_id, payload, target)
     session = wlc_session.session_payload(args, target)
-    wlc_session.create_session_package(session, target, force=True)
+    try:
+        wlc_session.create_session_package(session, target, force=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=500, detail=f"Unable to prepare WLC SCP staging: {exc}") from exc
     media_wlc_insert_session(session)
     row = media_wlc_session_row(session_id)
     return {

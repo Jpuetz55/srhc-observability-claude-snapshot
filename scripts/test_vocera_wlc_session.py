@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import json
+import os
+import pwd
 import re
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -19,6 +22,12 @@ import vocera_wlc_session as session  # noqa: E402
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
+
+
+# The session package now verifies that the advertised SCP target account is a
+# real local user. Use the current test user so this contract is portable in
+# CI while matching appsadmin on the collector host.
+LOCAL_SCP_USER = pwd.getpwuid(os.geteuid()).pw_name
 
 
 def test_long_session_package() -> None:
@@ -41,7 +50,7 @@ def test_long_session_package() -> None:
                 "--collector-host",
                 "10.0.128.107",
                 "--collector-scp-username",
-                "appsadmin",
+                LOCAL_SCP_USER,
                 "--sender-mac",
                 "00:09:ef:54:5f:46",
                 "--sender-ip",
@@ -75,7 +84,7 @@ def test_long_session_package() -> None:
         require("permit ip any 230.230.0.0 0.0.15.255" in long_cli, "missing Vocera pool destination ACL")
         require("permit igmp any any" in long_cli, "missing IGMP evidence ACL line")
         require("monitor capture VOCERA_C1000_001 inner mac 00:09:ef:54:5f:46 00:09:ef:61:0b:f7" in long_cli, "missing badge identity inner MAC filter")
-        require("scp://appsadmin@10.0.128.107//" in stop_cli, "missing password-free SCP export URI")
+        require(f"scp://{LOCAL_SCP_USER}@10.0.128.107//" in stop_cli, "missing password-free SCP export URI")
         require(not re.search(r"scp://[^/@:]+:[^/@]+@", stop_cli), "SCP URI must not embed a credential")
         require((target / "baseline.cli").is_file(), "missing baseline command sheet")
         require((target / "active-event.cli").is_file(), "missing active-event command sheet")
@@ -132,7 +141,7 @@ def test_incoming_staging_dir() -> None:
                 "--collector-host",
                 "10.0.128.107",
                 "--collector-scp-username",
-                "appsadmin",
+                LOCAL_SCP_USER,
                 "--sender-mac",
                 "00:09:ef:54:5f:46",
                 "--sender-ip",
@@ -145,8 +154,17 @@ def test_incoming_staging_dir() -> None:
         )
         require(rc == 0, "session init should succeed")
         target = Path(tmp) / "study_x" / "sess_incoming"
-        require((target / "incoming").is_dir(), "session package must create an incoming/ staging dir")
+        incoming = target / "incoming"
+        require(incoming.is_dir(), "session package must create an incoming/ staging dir")
         require((target / "pcaps").is_dir(), "session package must still create pcaps/")
+        # WLC SCP writes as collector_scp_username while the ingest service can
+        # run as root. The staging directory must therefore be owned by the
+        # SCP account and writable only there, not left root:root 0755.
+        account = pwd.getpwnam(LOCAL_SCP_USER)
+        incoming_stat = incoming.stat()
+        require(incoming_stat.st_uid == account.pw_uid, "incoming/ must be owned by the SCP account")
+        require(incoming_stat.st_gid == account.pw_gid, "incoming/ must use the SCP account primary group")
+        require(stat.S_IMODE(incoming_stat.st_mode) == 0o750, "incoming/ must have mode 0750")
         export_path = session.default_export_path("sess_incoming", target)
         require(
             export_path.endswith("/incoming/sess_incoming.pcap"),
@@ -180,7 +198,7 @@ def test_operator_vlan_override_package() -> None:
                 "--collector-host",
                 "10.0.128.107",
                 "--collector-scp-username",
-                "appsadmin",
+                LOCAL_SCP_USER,
                 "--sender-mac",
                 "00:09:ef:54:5f:46",
                 "--sender-ip",
@@ -221,7 +239,7 @@ def _init_session(tmp: str, session_id: str = "sess-001", *, vocera_vlan: int = 
             "--collector-host",
             "10.0.128.107",
             "--collector-scp-username",
-            "appsadmin",
+            LOCAL_SCP_USER,
             "--sender-mac",
             "00:09:ef:54:5f:46",
             "--sender-ip",
@@ -265,7 +283,7 @@ def test_duplicate_session_protection() -> None:
                 "--collector-host",
                 "10.0.128.107",
                 "--collector-scp-username",
-                "appsadmin",
+                LOCAL_SCP_USER,
                 "--sender-mac",
                 "00:09:ef:54:5f:46",
                 "--sender-ip",

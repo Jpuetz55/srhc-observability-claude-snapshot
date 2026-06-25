@@ -105,7 +105,25 @@ Confirm the package staging directory exists:
 ls -la "$SESSION_ROOT/$STUDY_ID/$SESSION_ID/incoming/"
 ```
 
-## 6. Stage a valid EPC in incoming/
+## 6. Verify the SCP staging ownership contract
+
+Study Web may run as root to access the root-owned PostgreSQL container, but the
+WLC SCP export authenticates as the package's `collector_scp_username` (normally
+`appsadmin`). Package creation therefore makes **only** `incoming/` owned by
+that SCP account with mode `0750`; `pcaps/` remains service-owned so only the
+ingest process can promote a validated file. Before a rehearsal or live export:
+
+```bash
+SESSION_DIR="$SESSION_ROOT/$STUDY_ID/$SESSION_ID"
+stat -c '%A %U:%G %n' "$SESSION_DIR/incoming" "$SESSION_DIR/pcaps"
+sudo -u appsadmin test -w "$SESSION_DIR/incoming"
+```
+
+Do not work around a failed write by exporting directly to `pcaps/` or by making
+the entire package world-writable. A failed ownership check is a deployment
+blocker because the WLC cannot create its SCP export.
+
+## 7. Stage a valid EPC in incoming/
 
 Drop a small, valid pcap/pcapng into `incoming/` (a sanitized capture or a tiny
 synthetic one — the first 4 bytes must be a real pcap/pcapng magic number):

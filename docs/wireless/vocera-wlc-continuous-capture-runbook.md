@@ -216,7 +216,12 @@ no ip access-list extended <temporary-name>
 ## Automatic EPC ingest and isolation
 
 `stop-export.cli` SCP-pushes the exported EPC into the session package
-`incoming/` folder, never directly into `pcaps/`. A file in `incoming/` means
+`incoming/` folder, never directly into `pcaps/`. Study Web makes `incoming/`
+owned by the configured local `COLLECTOR_SCP_USERNAME` (normally `appsadmin`)
+with mode `0750`, because the root-owned ingest service and the unprivileged
+SCP account have different duties. Before a live export, verify that account can
+write the exact `incoming/` path; do not loosen the whole package or export
+directly to `pcaps/`. A file in `incoming/` means
 "upload in progress or pending validation"; `pcaps/` means "stable, validated
 session evidence".
 
