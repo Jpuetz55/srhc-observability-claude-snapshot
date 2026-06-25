@@ -437,6 +437,9 @@ def test_systemd_and_trigger_contract() -> None:
     require("STUDY_WEB_WLC_INGEST_LOCK_FILE" in script, "trigger lock path should be configurable")
     require("flock -n" in script, "trigger must skip overlapping scans with a non-blocking flock")
     require("already_running" in script, "overlapping scans should exit cleanly with a structured reason")
+    require("/api/health" in script, "trigger should verify local Study Web health before scanning")
+    require("raw_root_missing" in script and "session_root_missing" in script, "trigger should fail early on missing raw/session roots")
+    require("disk_space_insufficient" in script, "trigger should check disk headroom before scanning")
     require("sshpass" not in script, "trigger must not use sshpass")
 
     # Timeout ordering: systemd TimeoutStartSec > curl max-time > parser timeout,
@@ -485,7 +488,15 @@ def test_ingest_installer_contract() -> None:
     require('if [[ ! -f "$DEFAULT_FILE" ]]; then' in text, "installer must create the EnvironmentFile only when absent")
     require("systemctl daemon-reload" in text, "installer must reload systemd")
     require('systemctl enable --now "$TIMER"' in text, "installer must enable and start the timer")
-    for key in ("STUDY_WEB_INGEST_HOST", "STUDY_WEB_INGEST_PORT", "STUDY_WEB_INGEST_TIMEOUT"):
+    for key in (
+        "STUDY_WEB_INGEST_HOST",
+        "STUDY_WEB_INGEST_PORT",
+        "STUDY_WEB_INGEST_TIMEOUT",
+        "VOCERA_MEDIA_QOE_RAW_DIR",
+        "STUDY_WEB_MEDIA_QOE_WLC_SESSION_ROOT",
+        "STUDY_WEB_WLC_INGEST_LOCK_FILE",
+        "STUDY_WEB_WLC_INGEST_MIN_FREE_BYTES",
+    ):
         require(key in text, f"installer EnvironmentFile must expose {key}")
     require("sshpass" not in text, "installer must not introduce SCP credentials")
 
