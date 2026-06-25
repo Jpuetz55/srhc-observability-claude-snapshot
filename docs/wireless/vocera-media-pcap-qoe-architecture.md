@@ -57,8 +57,8 @@ honest downgrade when UDP is useful but RTP cannot be proven.
 The checked-in configuration and code guard against future timestamps,
 insufficient RTP packet counts, transit discontinuities, invalid/partial ICAP
 downloads, duplicate cache work, and unbounded parser execution. The WLC session
-importer adds stable-upload detection, pcap magic validation, SHA-256 identity,
-atomic promotion, and idempotent retry behavior.
+importer adds stable-upload detection, pcap magic validation, root-owned
+finalization, SHA-256 identity, and idempotent retry behavior.
 
 ## Visualization status
 
