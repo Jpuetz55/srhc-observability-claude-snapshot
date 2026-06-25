@@ -18,8 +18,9 @@ integration boundary.
   and Vocera Iperf QoE only.
 - Added `wlc-mdt-telemetry.md` and linked it from all canonical entry points.
 - Documented the Phase 0 WLC EPC session importer: SCP landing in `incoming/`,
-  stability checks, hash, atomic promotion to `pcaps/`, `wlc_epc` registration,
-  parser execution, visibility classification, and idempotent retry.
+  stability checks, root-owned finalization into `pcaps/`, SHA-256 identity,
+  `wlc_epc` registration, parser execution, visibility classification, and
+  idempotent retry.
 - Updated WLC transfer, recovery, evidence-contract, Media QoE, Study Web, and
   ICAP runbooks so WLC EPC is never treated as generic ICAP evidence.
 - Indexed the Phase 0 rehearsal runbook and made timer enablement contingent on
