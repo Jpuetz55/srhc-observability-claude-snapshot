@@ -357,6 +357,13 @@ def test_study_web_ingest_contract() -> None:
     require("def _media_wlc_snapshot_id(artifact_id: str, attempt_id: str, phase: str, block_index: int)" in main_text, "attempt snapshots must be block-scoped")
     require("def _media_wlc_observation_id(artifact_id: str, block_index: int, index: int)" in main_text, "multicast observations must be block-scoped")
     require('"wlc_terminal_output"' in main_text, "terminal output should be recorded as a session artifact")
+    require('@app.get("/api/media-qoe/wlc/ingest/status")' in main_text, "Study Web should expose WLC ingest status")
+    require('@app.get("/api/media-qoe/wlc/ingest/metrics")' in main_text, "Study Web should expose bounded WLC ingest metrics")
+    require("vocera_wlc_ingest_artifacts_total{{state=" in main_text, "metrics may label bounded ingest states")
+    require("vocera_wlc_ingest_quarantined_total{{reason=" in main_text, "metrics may label bounded quarantine reasons")
+    metrics_text = main_text.split("def media_wlc_ingest_metrics_text()", 1)[1].split("def media_require_local_request", 1)[0]
+    for forbidden_label in ("session_id=", "artifact_id=", "capture_id=", "sha256=", "filename=", "mac=", "ip="):
+        require(forbidden_label not in metrics_text, f"WLC ingest metrics must not use high-cardinality label {forbidden_label}")
     # Capture-name collision protection for non-terminal sessions.
     require("is already in use by active session" in main_text, "Study Web must reject reuse of an active capture name")
     require("session_state not in ('imported', 'aborted')" in main_text, "capture-name reuse check must scope to non-terminal sessions")
