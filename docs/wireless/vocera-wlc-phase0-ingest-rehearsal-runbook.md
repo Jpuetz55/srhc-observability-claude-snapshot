@@ -1,5 +1,10 @@
 # Phase 0 WLC SCP Ingest — Database & Ingest Rehearsal Runbook
 
+Read [`vocera-wlc-phase0-production-contract.md`](vocera-wlc-phase0-production-contract.md)
+first. That document defines the production ownership, state-machine,
+quarantine, retry, and timer-enable contract. This runbook is the rehearsal
+procedure used to prove that contract before production enablement.
+
 This runbook proves the Phase 0 WLC capture-session EPC ingest state machine end
 to end against a **restored rehearsal database**, before any production
 deployment. It is the gate between merging the Phase 0 implementation and
@@ -111,12 +116,13 @@ Study Web may run as root to access the root-owned PostgreSQL container, but the
 WLC SCP export authenticates as the package's `collector_scp_username` (normally
 `appsadmin`). Package creation therefore makes **only** `incoming/` owned by
 that SCP account with mode `0750`; `pcaps/` remains service-owned so only the
-ingest process can promote a validated file. Before a rehearsal or live export:
+ingest process can finalize a validated file. Before a rehearsal or live export:
 
 ```bash
 SESSION_DIR="$SESSION_ROOT/$STUDY_ID/$SESSION_ID"
 stat -c '%A %U:%G %n' "$SESSION_DIR/incoming" "$SESSION_DIR/pcaps"
 sudo -u appsadmin test -w "$SESSION_DIR/incoming"
+sudo -u appsadmin test ! -w "$SESSION_DIR/pcaps"
 ```
 
 Do not work around a failed write by exporting directly to `pcaps/` or by making
@@ -133,7 +139,7 @@ cp /path/to/staged-rehearsal.pcap \
   "$SESSION_ROOT/$STUDY_ID/$SESSION_ID/incoming/$SESSION_ID.pcap"
 ```
 
-## 7–9. Stability wait, then promotion
+## 7–9. Stability wait, then finalization
 
 7. Run the ingest scan once (localhost only):
 
@@ -142,7 +148,7 @@ curl -fsS -X POST -H 'content-type: application/json' -d '{}' \
   http://127.0.0.1:8097/api/media-qoe/wlc/sessions/ingest-scan | python3 -m json.tool
 ```
 
-8. The **first** pass must record `upload_detected` (not yet promoted): it has
+8. The **first** pass must record `upload_detected` (not yet finalized): it has
    only one observation of the file and is waiting for stability.
 
 ```bash
@@ -156,7 +162,7 @@ ls "$SESSION_ROOT/$STUDY_ID/$SESSION_ID/incoming/"   # file still here
    (append a byte) and rerun the scan; it must stay `upload_detected`.
 
 9. Wait past the stability window, then run the scan again. The file must be
-   promoted into `pcaps/`:
+   finalized into `pcaps/`:
 
 ```bash
 sleep 6
@@ -164,7 +170,13 @@ curl -fsS -X POST -H 'content-type: application/json' -d '{}' \
   http://127.0.0.1:8097/api/media-qoe/wlc/sessions/ingest-scan | python3 -m json.tool
 ls "$SESSION_ROOT/$STUDY_ID/$SESSION_ID/pcaps/"      # EPC now here
 ls "$SESSION_ROOT/$STUDY_ID/$SESSION_ID/incoming/"   # now empty
+stat -c '%A %U:%G %n' "$SESSION_ROOT/$STUDY_ID/$SESSION_ID/pcaps/$SESSION_ID.pcap"
+sudo -u appsadmin test ! -w "$SESSION_ROOT/$STUDY_ID/$SESSION_ID/pcaps/$SESSION_ID.pcap"
 ```
+
+The finalized EPC must be service-owned (`root:root` in production) and
+non-writable by the SCP upload account. This file-level assertion is required;
+checking only the parent `pcaps/` directory is not enough.
 
 ## 10–12. Exactly-one assertions
 
@@ -186,9 +198,9 @@ $PSQL -c "select count(*) from vocera_media_capture_parse_runs r
           where c.capture_point = 'wlc_epc' and c.source_path like '%/$SESSION_ID/pcaps/%';"   # 1
 ```
 
-## 13. Generic publisher must ignore the promoted EPC
+## 13. Generic publisher must ignore the finalized EPC
 
-The generic ICAP batch publisher must not discover the promoted session EPC:
+The generic ICAP batch publisher must not discover the finalized session EPC:
 
 ```bash
 PYTHONPATH=tools/vocera_media_qoe python3 - <<PY
@@ -212,7 +224,7 @@ recover it — without duplicating files, artifacts, or captures.
 
 ```bash
 # Induce a failure (pick one): point the parser config at a bad path, or
-# temporarily revoke parse permissions, then stage + promote a second EPC.
+# temporarily revoke parse permissions, then stage + finalize a second EPC.
 # After the failing run:
 $PSQL -c "select ingest_state, parser_status,
                  coalesce((metadata->>'retry_count')::int,0) as retries
@@ -240,8 +252,8 @@ The rehearsal passes when, with no manual file movement, hashing, or parser
 launch:
 
 - the schema applies twice cleanly (idempotent),
-- a growing/incomplete upload is never promoted,
-- a stable valid EPC is promoted `incoming/` → `pcaps/`,
+- a growing/incomplete upload is never finalized,
+- a stable valid EPC is finalized as service-owned `pcaps/` evidence,
 - exactly one artifact, one `wlc_epc` capture, and one successful parse exist,
 - the generic publisher never sees the EPC, and
 - a forced failure recovers via retry without duplicating files, artifacts, or
