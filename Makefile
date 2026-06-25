@@ -197,6 +197,7 @@ help:
 	@echo "  make vocera-media-qoe-install  Install media PCAP QoE textfile systemd service/timer"
 	@echo "  make vocera-media-qoe-postgres-install Install/start media QoE PostgreSQL container"
 	@echo "  make vocera-media-qoe-install-db Apply media QoE PostgreSQL schema/views"
+	@echo "  make vocera-media-qoe-apply-migrations Apply versioned media QoE migrations"
 	@echo "  make vocera-media-qoe-emit-sql Emit media QoE PostgreSQL import SQL from parsed captures"
 	@echo "  make vocera-media-qoe-load-db Load media QoE capture-time history into PostgreSQL"
 	@echo "  make vocera-iperf-qoe-parse    Publish uploaded laptop iperf JSON as Prometheus textfile"
@@ -567,6 +568,13 @@ vocera-media-qoe-install-db:
 	@test -n "$(VOCERA_MEDIA_QOE_DATABASE_URL)" || (echo "Set VOCERA_MEDIA_QOE_DATABASE_URL" && exit 1)
 	@case "$(VOCERA_MEDIA_QOE_PSQL_BIN)" in *vocera_media_qoe_psql_in_container.sh) sudo -v ;; esac
 	PYTHONPATH=.:tools/vocera_media_qoe python3 -m vocera_media_qoe_sql install-db \
+		--postgres-url "$(VOCERA_MEDIA_QOE_DATABASE_URL)" \
+		--psql-bin "$(VOCERA_MEDIA_QOE_PSQL_BIN)"
+
+vocera-media-qoe-apply-migrations:
+	@test -n "$(VOCERA_MEDIA_QOE_DATABASE_URL)" || (echo "Set VOCERA_MEDIA_QOE_DATABASE_URL" && exit 1)
+	@case "$(VOCERA_MEDIA_QOE_PSQL_BIN)" in *vocera_media_qoe_psql_in_container.sh) sudo -v ;; esac
+	python3 ./scripts/apply_vocera_media_qoe_migrations.py \
 		--postgres-url "$(VOCERA_MEDIA_QOE_DATABASE_URL)" \
 		--psql-bin "$(VOCERA_MEDIA_QOE_PSQL_BIN)"
 
