@@ -1,5 +1,9 @@
 # Vocera WLC capture and session-ingest recovery
 
+The production evidence contract is
+[`vocera-wlc-phase0-production-contract.md`](vocera-wlc-phase0-production-contract.md).
+Use that document for ownership, quarantine, retry, and timer-enable rules.
+
 Use this runbook when a manual EPC is abandoned, SCP export fails, a stable
 upload does not import, or the operator is unsure whether the WLC capture still
 exists.
@@ -34,8 +38,8 @@ The WLC prompts for the collector password interactively. Do not add it to the
 command line, Study Web, session manifest, or a committed file.
 
 Do not export directly to `pcaps/`. `incoming/` means an upload that still
-requires stability validation; `pcaps/` is reserved for importer-promoted
-artifacts.
+requires stability validation; `pcaps/` is reserved for importer-finalized
+service-owned artifacts.
 
 ## 3. Check collector-side state
 
@@ -54,12 +58,14 @@ Interpret the result:
 | File is still changing in `incoming/` | Wait for a stable upload; do not move it. |
 | Stable valid file remains in `incoming/` | Verify the timer/service and Study Web availability; run the documented rehearsal/diagnostic path, not a generic media scan. |
 | File is in `pcaps/` with `failed` parser/DB state | Preserve it. The importer retries safely after the dependency is restored. |
+| File is in `pcaps/` but writable by the SCP account | Disable the timer and treat this as a Phase 0 production-contract failure. Preserve the file and re-run finalization after review. |
+| Artifact is `quarantined` | Do not parse it. Review the stored `failure_category` and preserve the source/final evidence for audit. |
 | No file arrived | Investigate WLC SCP reachability/credentials and the exact export destination from the generated command sheet. |
 | No timer intentionally installed | Handle the package through the Phase 0/rehearsal procedure before enabling automation; do not improvise a generic import. |
 
-### Automatic retry of promoted artifacts
+### Automatic retry of finalized artifacts
 
-A file already promoted into `pcaps/` must **not** be moved back to `incoming/`.
+A file already finalized into `pcaps/` must **not** be moved back to `incoming/`.
 After the database, parser configuration, permissions, or Study Web dependency
 is corrected, the next local ingest-timer pass automatically retries the same
 session artifact from `pcaps/`. It reuses the existing artifact/capture identity
@@ -67,6 +73,20 @@ so a transient failure does not create a duplicate file, artifact, or capture.
 
 Use the Study Web artifact state and the service journal to confirm the automatic
 retry. Do not invoke the generic raw-file scan as a substitute.
+
+### Final artifact integrity check
+
+For any finalized EPC, verify `root:root` ownership in production and confirm
+the SCP account cannot write the file:
+
+```bash
+stat -c '%A %U:%G %s %n' "$session_dir/pcaps/<file>.pcap"
+sudo -u appsadmin test ! -w "$session_dir/pcaps/<file>.pcap"
+```
+
+The SCP account must not be able to modify finalized evidence. If this check
+fails, stop the timer and do not rely on the artifact until the ownership issue
+is corrected and documented.
 
 ## 4. Clean up controller objects
 
