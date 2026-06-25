@@ -24,6 +24,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+# Keep the repository root importable: vocera_media_qoe imports shared helpers
+# through the ``tools.common`` namespace, while this test also imports the
+# standalone module from tools/vocera_media_qoe. Both paths are required when
+# the test runs directly from ``make test``.
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools" / "vocera_media_qoe"))
 
 import vocera_wlc_session_ingest as ingest  # noqa: E402

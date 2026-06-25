@@ -5,6 +5,7 @@ set -euo pipefail
 # This is deliberately not a command runner. It starts an ordinary interactive
 # SSH session and records terminal output with util-linux script(1). It never
 # logs stdin, never supplies a password, and never replays commands.
+# It stores no WLC or SCP secrets; the operator enters them only inside the interactive TTY.
 
 usage() {
   cat <<'EOF'

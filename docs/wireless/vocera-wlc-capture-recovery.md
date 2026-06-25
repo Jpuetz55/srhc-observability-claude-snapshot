@@ -57,6 +57,17 @@ Interpret the result:
 | No file arrived | Investigate WLC SCP reachability/credentials and the exact export destination from the generated command sheet. |
 | No timer intentionally installed | Handle the package through the Phase 0/rehearsal procedure before enabling automation; do not improvise a generic import. |
 
+### Automatic retry of promoted artifacts
+
+A file already promoted into `pcaps/` must **not** be moved back to `incoming/`.
+After the database, parser configuration, permissions, or Study Web dependency
+is corrected, the next local ingest-timer pass automatically retries the same
+session artifact from `pcaps/`. It reuses the existing artifact/capture identity
+so a transient failure does not create a duplicate file, artifact, or capture.
+
+Use the Study Web artifact state and the service journal to confirm the automatic
+retry. Do not invoke the generic raw-file scan as a substitute.
+
 ## 4. Clean up controller objects
 
 After export is confirmed or the capture is intentionally abandoned:

@@ -35,6 +35,8 @@ preserved implementation and history notes.
   transfer boundary.
 - [`wireless/vocera-wlc-capture-recovery.md`](wireless/vocera-wlc-capture-recovery.md)
   — safe stop/export/cleanup and ingest recovery.
+- [`wireless/vocera-wlc-session-maintainer-contract.md`](wireless/vocera-wlc-session-maintainer-contract.md)
+  — required code comments, documentation updates, and validation for WLC session changes.
 - [`wireless/vocera-media-dnac-icap-runbook.md`](wireless/vocera-media-dnac-icap-runbook.md)
   — read-only completed-ICAP discovery/download and parser boundary.
 - [`wireless/vocera-media-pcap-qoe-architecture.md`](wireless/vocera-media-pcap-qoe-architecture.md)

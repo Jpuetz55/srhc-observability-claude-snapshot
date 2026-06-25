@@ -268,6 +268,7 @@ test:
 	python3 ./scripts/test_vocera_wlc_session_ingest.py
 	python3 ./scripts/test_vocera_wlc_session_console.py
 	python3 ./scripts/test_wlc_session_make_safety.py
+	python3 ./scripts/test_wlc_session_documentation_contract.py
 	python3 ./scripts/test_vocera_iperf_qoe.py
 	python3 ./scripts/test_vocera_rf_validation.py
 	python3 ./scripts/test_publish_dnac_topology.py
