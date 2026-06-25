@@ -240,7 +240,14 @@ def test_study_web_ingest_contract() -> None:
     # Hardening: stranded post-promotion artifacts are retried automatically.
     require("def media_wlc_retry_promoted_artifacts(" in main_text, "ingest must auto-retry artifacts stranded after promotion")
     require("retried = media_wlc_retry_promoted_artifacts(" in main_text, "the scan must run the retry pass")
-    require("ingest_state in ('imported', 'failed')" in main_text, "retry must target imported/failed artifacts with a promoted path")
+    require("ingest_state in ('promoted', 'registered', 'imported', 'failed', 'retry_pending')" in main_text, "retry must target promoted/registered/imported/failed artifacts with a promoted path")
+    require("def media_wlc_epc_visibility(" in main_text, "ingest must classify EPC visibility before making parser claims")
+    require("outer_capwap_only" in main_text and "inner_voice_visible" in main_text, "visibility classifier must distinguish CAPWAP-only and inner RTP evidence")
+    require("def media_wlc_transcript_scan(" in main_text, "ingest scan must parse recorded WLC terminal transcripts")
+    require("media_wlc_transcript_scan(session_id=session_id)" in main_text, "ingest scan must include transcript ingestion")
+    require("wlc_cli.infer_transcript_phase(" in main_text, "transcript ingest must classify evidence phase")
+    require("wlc_cli.extract_attempt_ids(" in main_text, "transcript ingest must bind only explicit attempt markers")
+    require('"wlc_terminal_output"' in main_text, "terminal output should be recorded as a session artifact")
     # Capture-name collision protection for non-terminal sessions.
     require("is already in use by active session" in main_text, "Study Web must reject reuse of an active capture name")
     require("session_state not in ('imported', 'aborted')" in main_text, "capture-name reuse check must scope to non-terminal sessions")
@@ -255,8 +262,23 @@ def test_session_artifact_schema_contract() -> None:
     require("capture_id text references vocera_media_captures(capture_id) on delete set null" in schema, "artifacts should link to the registered capture")
     for kind in ("wlc_epc", "wlc_terminal_output", "wlc_terminal_timing", "wlc_transcript"):
         require(kind in schema, f"artifact_kind {kind} must be allowed")
-    for state in ("waiting_for_export", "upload_detected", "validating", "imported", "parsing", "parsed", "failed", "quarantined"):
+    for state in (
+        "waiting_for_export",
+        "upload_detected",
+        "waiting_for_stability",
+        "validating",
+        "validated",
+        "promoted",
+        "registered",
+        "imported",
+        "parsing",
+        "parsed",
+        "failed",
+        "retry_pending",
+        "quarantined",
+    ):
         require(state in schema, f"ingest_state {state} must be allowed")
+    require("chk_vocera_media_session_artifacts_ingest_state" in schema, "schema must replace the artifact ingest-state check idempotently")
     require("uq_vocera_media_session_artifacts_session_sha" in schema, "duplicate content imports must be guarded for idempotency")
 
 
