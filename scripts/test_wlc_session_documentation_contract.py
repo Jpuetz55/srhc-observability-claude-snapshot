@@ -38,14 +38,14 @@ def test_operator_docs_cover_session_ingest_contract() -> None:
     security = read("docs/wireless/vocera-wlc-capture-security.md")
     index = read("docs/README.md")
 
-    require("incoming/" in continuous and "pcaps/" in continuous,
-            "continuous-capture runbook must explain incoming/ -> pcaps/ promotion")
+    require("incoming/" in continuous and "root-owned" in continuous and "pcaps/" in continuous,
+            "continuous-capture runbook must explain root-owned incoming/ -> pcaps/ finalization")
     require("wlc-sessions/" in transfer and "wlc-attempts/" in transfer,
             "transfer boundary must document generic-scan exclusions")
     require("do not manually move" in transfer.lower(),
             "transfer boundary must tell operators not to bypass session ingest")
-    require("retry" in recovery.lower() and "pcaps/" in recovery,
-            "recovery runbook must document retry from promoted evidence")
+    require("retry" in recovery.lower() and "pcaps/" in recovery and "root:root" in recovery,
+            "recovery runbook must document retry from finalized service-owned evidence")
     require("localhost-only" in rehearsal.lower(),
             "rehearsal runbook must document the local-only ingest trigger")
     require("do not store" in security.lower() and "password" in security.lower(),
@@ -67,8 +67,8 @@ def test_critical_code_comments_explain_safety_boundaries() -> None:
             "ingest module needs an explicit SCP-stability comment")
     require("only the local systemd timer" in study_web,
             "Study Web needs an explicit local-only trigger comment")
-    require("Promotion into pcaps/ happens before registration and parsing" in study_web,
-            "Study Web needs an explicit promoted-artifact retry comment")
+    require("Finalization into pcaps/ happens before registration and parsing" in study_web,
+            "Study Web needs an explicit finalized-artifact retry comment")
     require("stores no WLC or SCP secrets" in console,
             "console recorder needs an explicit no-secrets/no-runner comment")
 
