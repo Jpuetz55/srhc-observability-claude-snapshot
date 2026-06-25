@@ -366,6 +366,7 @@ def test_study_web_ingest_contract() -> None:
 
 def test_session_artifact_schema_contract() -> None:
     schema = (ROOT / "sql" / "vocera_media_qoe_schema.sql").read_text(encoding="utf-8")
+    require("create table if not exists schema_migrations" in schema, "media schema should include the migration ledger")
     require("create table if not exists vocera_media_session_artifacts" in schema, "missing session-artifact table")
     require("capture_session_id text not null references vocera_media_capture_sessions(session_id) on delete cascade" in schema, "artifacts must belong to a capture session")
     require("capture_id text references vocera_media_captures(capture_id) on delete set null" in schema, "artifacts should link to the registered capture")
@@ -389,6 +390,24 @@ def test_session_artifact_schema_contract() -> None:
         require(state in schema, f"ingest_state {state} must be allowed")
     require("chk_vocera_media_session_artifacts_ingest_state" in schema, "schema must replace the artifact ingest-state check idempotently")
     require("uq_vocera_media_session_artifacts_session_sha" in schema, "duplicate content imports must be guarded for idempotency")
+
+
+def test_migration_framework_contract() -> None:
+    migration_dir = ROOT / "sql" / "migrations"
+    ledger = (migration_dir / "20260625_001_schema_migrations.sql").read_text(encoding="utf-8")
+    artifacts = (migration_dir / "20260625_002_phase0_session_artifacts.sql").read_text(encoding="utf-8")
+    runner = (ROOT / "scripts" / "apply_vocera_media_qoe_migrations.py").read_text(encoding="utf-8")
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+
+    require("create table if not exists schema_migrations" in ledger, "first migration must create the ledger")
+    require("checksum text not null" in ledger, "migration ledger must record file checksums")
+    require("source_commit text not null" in ledger, "migration ledger must record source commit")
+    require("create table if not exists vocera_media_session_artifacts" in artifacts, "Phase 0 artifact migration missing table")
+    require("uq_vocera_media_session_artifacts_session_sha" in artifacts, "Phase 0 migration must preserve duplicate-content guard")
+    require("sha256_file(path)" in runner, "migration runner must checksum migration files")
+    require("checksum mismatch" in runner, "migration runner must reject edited applied migrations")
+    require("schema_migrations" in runner, "migration runner must use the migration ledger")
+    require("vocera-media-qoe-apply-migrations:" in makefile, "Makefile must expose the migration runner")
 
 
 def _env_int(text: str, key: str) -> int:
@@ -492,6 +511,7 @@ def main() -> int:
     test_batch_publisher_excludes_wlc_dirs()
     test_study_web_ingest_contract()
     test_session_artifact_schema_contract()
+    test_migration_framework_contract()
     test_systemd_and_trigger_contract()
     test_isolation_and_hardening_contract()
     test_ingest_installer_contract()
