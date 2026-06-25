@@ -53,6 +53,55 @@ session.json
 session-events.json
 ```
 
+## Logged WLC console
+
+Open the WLC from the session page command or from the Make target:
+
+```bash
+make vocera-media-qoe-wlc-session-console \
+  SESSION_DIR=/var/lib/vocera-media-qoe/raw/wlc-sessions/<study>/<session> \
+  WLC_SSH_HOST=SRHC-WLC-40G-SEC \
+  WLC_SSH_USER=<operator-wlc-user>
+```
+
+This starts a normal interactive SSH session through `script(1)` output-only
+logging. The operator still authenticates, pastes commands, enters the SCP
+password at export time, and runs cleanup manually. The recorder writes:
+
+```text
+cli/terminal/wlc-terminal-<timestamp>.out
+cli/terminal/wlc-terminal-<timestamp>.timing
+cli/terminal/wlc-terminal-<timestamp>.json
+```
+
+The recorder must not use input logging (`--log-in` or `--log-io`) and must not
+automate SSH. Password input is not echoed, but anything visibly printed on the
+terminal becomes recorded evidence.
+
+## Short validation smoke mode
+
+Before a long incident reproduction, create a short-validation session package:
+
+```bash
+make vocera-media-qoe-wlc-session-smoke-init \
+  STUDY_ID=study_v5000_c1000_multicast \
+  SESSION_ID=<unique-session-id> \
+  WLC_NAME=SRHC-WLC-40G-SEC \
+  WLC_INTERFACE=Port-channel1 \
+  VOCERA_VLAN=684 \
+  COLLECTOR_HOST=10.0.128.107 \
+  COLLECTOR_SCP_USERNAME=appsadmin \
+  V5000_MAC=00:09:ef:54:5f:46 \
+  V5000_IP=10.16.88.228 \
+  C1000_MAC=00:09:ef:61:0b:f7 \
+  C1000_IP=10.16.88.230
+```
+
+Use `start-short-validation.cli`; it keeps the documented circular ring syntax
+but adds a 90-second duration limit. The smoke test validates WLC command
+syntax, SCP export to `incoming/`, automatic collector ingest, parser launch,
+and Study Web artifact status. It is not an intermittent-failure diagnosis.
+
 ## Long reproduction mode
 
 Use `start-long.cli` for the real intermittent failure reproduction. It has no
@@ -119,15 +168,16 @@ before using the resolved-group command sheet.
 When the failure reproduces:
 
 1. Mark the outcome in Study Web.
-2. Run `stop-export.cli`.
+2. Keep the broadcast/group state active a few seconds if operationally possible.
 3. Save candidate active state with `active-event.cli`.
 4. Paste `show wireless multicast group summary` into Study Web and select the active group/VLAN row.
-5. Run `resolved-active-group.cli` and save that transcript.
-6. Run `post-failure.cli`.
-7. Confirm the EPC landed under the session package `incoming/` folder. The
+5. Run the generated attempt-scoped resolved-group command sheet.
+6. Run `stop-export.cli`.
+7. Run `post-failure.cli`.
+8. Confirm the EPC landed under the session package `incoming/` folder. The
    collector imports it automatically (see *Automatic EPC ingest and isolation*
    below); no manual move, hash, register, or parse step is required.
-8. Run `cleanup.cli`.
+9. Run `cleanup.cli`.
 
 Gather the live group evidence (steps 3-5) **before** `stop-export.cli` whenever
 operationally possible: a dynamic Vocera multicast group can disappear within
@@ -163,8 +213,11 @@ the import with no operator action:
 3. Atomically promote `incoming/<file>` to `pcaps/<file>`.
 4. Register it as a capture with `capture_point=wlc_epc`.
 5. Run the existing media QoE parser once.
-6. Surface status in Study Web (file, size, SHA-256, ingest state, parser
-   result) for the session.
+6. Classify what the EPC can and cannot prove (`inner_voice_visible`,
+   `inner_multicast_visible`, `outer_capwap_only`, `control_plane_only`,
+   `unsupported_link_or_decode`, or `empty_or_unusable`).
+7. Surface status in Study Web (file, size, SHA-256, ingest state, parser
+   result, and visibility class) for the session.
 
 The trigger endpoint (`POST /api/media-qoe/wlc/sessions/ingest-scan`) is
 **localhost-only**: only the local systemd timer may start a scan. The Study Web
@@ -196,10 +249,11 @@ capture name by any non-terminal session.
 ### Recovery
 
 Promotion to `pcaps/` happens before registration and parsing. If a transient
-database or parser error fails the import after promotion, the artifact is left
-in `imported`/`failed` state with its `pcaps/` path recorded, and the same timer
-automatically retries it (reusing the existing capture, never moving files or
-re-importing) until it parses or a bounded retry limit is reached.
+database or parser error fails after promotion, the artifact is left in
+`promoted`, `registered`, `retry_pending`, or `failed` state with its `pcaps/`
+path recorded, and the same timer automatically retries it (reusing the existing
+capture, never moving files or re-importing) until it parses or a bounded retry
+limit is reached.
 
 ### Timeout ordering
 
@@ -211,3 +265,22 @@ systemd TimeoutStartSec (660s)
   > curl max-time / STUDY_WEB_INGEST_TIMEOUT (600s)
     > Study Web parser timeout STUDY_WEB_MEDIA_QOE_PARSE_TIMEOUT_SECONDS (480s)
 ```
+
+## Source anchors
+
+- Cisco Catalyst 9800 EPC documentation: validates port-channel attachment,
+  circular-file buffers, `file-size`, match filters, and export workflow.
+- Cisco Catalyst 9800 Vocera broadcast guidance: separates the Vocera
+  `230.230.x.x` application group from the WLC-to-AP CAPWAP multicast group and
+  identifies WLC group summary/detail evidence as the receiver-membership check.
+- Cisco Catalyst 9800 multicast troubleshooting guidance: identifies AP-side
+  `show capwap mcast mgid clients` and `show capwap mcast mgid all` as AP MGID
+  evidence.
+- Vocera Infrastructure Planning Guide: documents badge multicast use, the
+  fixed `230.230.0.1` plus 4096-address range, IGMPv2 default for B3000n/V5000/
+  C1000, and DTIM/beacon multicast-delay risk.
+- RFC 1112: IPv4 multicast-to-Ethernet mapping uses only the low-order 23 bits,
+  so multicast MAC evidence is corroborating, not globally unique.
+- util-linux `script(1)`: use `--log-out` and `--log-timing`; never use
+  `--log-in` or `--log-io` for WLC console evidence because those modes can log
+  hidden password input.
