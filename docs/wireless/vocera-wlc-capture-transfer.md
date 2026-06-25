@@ -25,9 +25,9 @@ that file to `pcaps/`. The timer performs the required lifecycle:
 ```text
 incoming/ (upload pending)
   -> stable size/mtime
-  -> pcap magic-byte check + SHA-256
-  -> atomic promotion
-pcaps/ (validated final artifact)
+  -> pcap magic-byte check
+  -> root-owned finalization + SHA-256 verification
+pcaps/ (validated service-owned final artifact)
   -> capture registration as wlc_epc
   -> parser run / artifact state in Study Web
 ```
