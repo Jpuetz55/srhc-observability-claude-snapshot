@@ -165,10 +165,10 @@ def default_export_path(session_id: str, package_dir: Path) -> str:
     """Return the suggested collector-side SCP upload path for final export.
 
     The WLC SCP-pushes the exported EPC into ``incoming/`` so the collector can
-    detect a *completed* upload, validate and hash it, and only then promote it
-    into ``pcaps/`` as stable session evidence. Exporting straight into
-    ``pcaps/`` would let a half-written file look like final evidence and could
-    be picked up mid-transfer.
+    detect a *completed* upload and only then finalize it into service-owned
+    ``pcaps/`` evidence. Exporting straight into ``pcaps/`` would let a
+    half-written file look like final evidence and could be picked up
+    mid-transfer.
     """
 
     return str((package_dir / "incoming" / f"{session_id}.pcap").resolve(strict=False))
@@ -543,7 +543,7 @@ Long reproduction workflow:
    d. Run the regenerated `attempt-<attempt-id>-resolved-group.cli` (group detail, source detail, IGMP snooping).
 7. Only then run `stop-export.cli` to stop and export the PCAP. The WLC
    SCP-pushes it into `incoming/`; the collector detects the completed upload,
-   validates and hashes it, promotes it into `pcaps/`, and parses it
+   validates and finalizes it into service-owned `pcaps/`, and parses it
    automatically. No manual move, hash, register, or parse step is required.
 8. Run `post-failure.cli` and save output under `cli/`.
 9. After export is confirmed, run `cleanup.cli`.
@@ -603,7 +603,8 @@ def configure_incoming_upload_dir(incoming: Path, account: pwd.struct_passwd) ->
         )
 
     # Restrict upload creation to the configured SCP principal. Root retains
-    # access and later atomically moves the stable file into root-owned pcaps/.
+    # access and later copies the stable file into root-owned, non-writable
+    # pcaps/ evidence instead of preserving upload-owned metadata.
     incoming.chmod(0o750)
     if current_uid == 0:
         os.chown(incoming, account.pw_uid, account.pw_gid)
