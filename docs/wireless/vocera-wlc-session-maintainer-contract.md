@@ -14,11 +14,13 @@ workflow. It is not an operator runbook. The operator entry point remains
   `wlc-sessions/` and `wlc-attempts/`. Only the WLC session-ingest workflow may
   process a session EPC.
 - **`incoming/` is not evidence yet.** SCP uploads land in `incoming/`; only a
-  stable, magic-validated, SHA-256-hashed file may be promoted atomically to
-  `pcaps/`.
-- **A promoted artifact is retryable.** A transient DB or parser failure must
+  stable, magic-validated file may be finalized into service-owned `pcaps/`
+  evidence. The finalizer must not rename the upload-owned inode into final
+  evidence.
+- **A finalized artifact is retryable.** A transient DB or parser failure must
   be recoverable from `pcaps/` without an operator moving the file back to
-  `incoming/`.
+  `incoming/`. The database may still use `promoted` as the lifecycle state name
+  for compatibility, but the filesystem action is owner-controlled finalization.
 - **The ingest trigger is local-only.** Browser users read status through GET
   endpoints. Only the localhost systemd timer may initiate a filesystem scan or
   parser run.
@@ -47,10 +49,10 @@ Comment the **why** for non-obvious behavior, particularly when a future
 maintainer might otherwise simplify away a safety boundary. Required examples:
 
 - why generic discovery excludes WLC package roots;
-- why files are promoted only after two stable observations;
+- why files are finalized only after two stable observations;
 - why the ingest endpoint only permits loopback callers;
-- why a failed promoted artifact is retried from `pcaps/` instead of rescanning
-  `incoming/`;
+- why a failed finalized artifact is retried from `pcaps/` instead of
+  rescanning `incoming/`;
 - why the terminal logger is output-only and never records input.
 
 Use a concise module docstring for each WLC workflow module and docstrings for
