@@ -15,6 +15,11 @@ Expected standalone VM layout:
 - Mimir remote-write path: `http://127.0.0.1:9009/api/v1/push`
 - Mimir multitenancy: disabled
 
+For the live WLC dial-out telemetry architecture and expected control-plane
+subscriptions, read [`wlc-mdt-telemetry.md`](wlc-mdt-telemetry.md). The metric
+queries below are diagnostic interfaces; their existence does not imply every
+metric has a provisioned Grafana panel.
+
 Because Mimir multitenancy is disabled in this standalone VM profile, do **not** use the Kubernetes tenant header:
 
 ```bash

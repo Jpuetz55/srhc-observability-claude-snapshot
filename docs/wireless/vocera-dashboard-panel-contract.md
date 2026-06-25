@@ -1,39 +1,45 @@
-# Vocera Dashboard Panel Contract
+# Legacy Vocera dashboard panel contract
 
-This document is the accuracy contract for the Vocera Badge 802.11r dashboard.
-It separates client/RUN-state telemetry, client-side detail telemetry, AP voice
-access-category latency, and RF context so a rendered panel is not mistaken for
-a validated measurement.
+> **Status: retained metric/design contract; no matching legacy Vocera badge
+> dashboard is currently provisioned.** The tested Grafana inventory is limited
+> to **WLC Control Plane** and **Vocera Iperf QoE**. Do not present the panels
+> described below as a live operational dashboard without intentionally adding,
+> testing, and promoting its dashboard JSON.
+
+This document preserves the measurement and labeling rules originally defined
+for a Vocera badge 802.11r dashboard. It remains useful when reviewing a future
+dashboard, ad-hoc Grafana Explore query, or metric-contract change, but it does
+not authorize a dashboard deployment or prove the underlying historical metric
+families are currently collected.
 
 Badge-to-badge and badge-to-server media latency/jitter require packet-stream
-measurements. See `docs/wireless/vocera-media-latency-jitter-methodology.md`
+measurements. See
+[`vocera-media-latency-jitter-methodology.md`](vocera-media-latency-jitter-methodology.md)
 for the source-of-truth methodology.
 
-Run the live panel audit with:
-
-```bash
-make vocera-dashboard-audit
-```
-
-Run raw WLC CLI to Prometheus textfile verification with:
-
-```bash
-make wireless-rf-verify-parse
-```
+`make vocera-dashboard-audit` is retained for a deliberately provisioned
+compatible dashboard. It is not a routine current-platform health check.
 
 ## Source Types
 
-- MDT/client telemetry: Cisco wireless client telemetry and recording rules
+- **MDT/client telemetry:** Cisco wireless client telemetry and recording rules
   derived from client state, FT state, retry, RSSI, SNR, and current AP labels.
-- Client detail raw: Catalyst Center badge client detail metrics ending in
-  `_cc`. These are client-side/detail-derived values, not AP voice AC latency.
-- WLC CLI/AP voice AC: `show wireless stats ap name <AP>
-  traffic-distribution slot <slot> latency access-category voice last-received`
-  parsed into `wireless_ap_ac_latency_*_cli` and normalized by recording rules.
-  Cisco defines this as AP-to-client successful transmission time by access
-  category; it is not badge-to-badge or badge-to-server media latency.
-- RF context: AP RF, channel, DFS, utilization, neighbor, and noise metrics used
-  to explain possible causes after an AP voice AC outlier is found.
+- **Client-detail raw:** historical Catalyst Center badge-client detail metrics
+  ending in `_cc`; these are client/detail-derived values, not AP voice AC
+  latency.
+- **WLC CLI/AP voice AC:** manually acquired `show wireless stats ap ...
+  traffic-distribution ... latency access-category voice last-received` evidence
+  parsed into `wireless_ap_ac_latency_*_cli`. Cisco describes it as AP-to-client
+  successful-transmission time by access category, not media latency.
+- **RF context:** AP RF/channel/DFS/utilization/neighbor/noise context used to
+  explain an outlier after evidence is available.
+
+## Preserved panel semantics
+
+The legacy panel specification follows. When reusing any item, preserve the
+stated source, unit, and limitation; most importantly, do not relabel
+client-state time, AP voice access-category time, or synthetic RTT as RTP/media
+latency.
 
 ## Executive Summary
 

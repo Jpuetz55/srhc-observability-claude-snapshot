@@ -1,5 +1,11 @@
 # Manual Survey Entry workflow
 
+> **Historical implementation record.** This describes the patch that introduced
+> candidate-first manual survey entry. For current operator procedure, use
+> [`docs/study-workflow-web-ui.md`](docs/study-workflow-web-ui.md) and
+> [`docs/wireless/vocera-badge-ekahau-rf-validation-runbook.md`](docs/wireless/vocera-badge-ekahau-rf-validation-runbook.md).
+> It is not a standalone deployment or recovery runbook.
+
 This patch makes the RF validation web workflow candidate-first:
 
 1. Run execution parses badge and Ekahau files.

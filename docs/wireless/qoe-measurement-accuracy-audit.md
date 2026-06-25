@@ -1,5 +1,10 @@
 # QoE Measurement Accuracy Audit — 2026-05
 
+> **Historical audit snapshot (May 2026).** Findings here are useful background
+> for parser correctness, but this document does not describe the current
+> dashboard inventory or canonical Study Web/manual-WLC workflow. Refer to the
+> architecture and current runbooks before acting on it.
+
 Audit of the five QoE tools that ship telemetry to Mimir / PostgreSQL after the
 recent push that bundled them into `scripts/run_vocera_survey_refresh.sh`:
 

@@ -1,5 +1,10 @@
 # Phase 1 UX Refactor - Implementation Complete
 
+> **Historical implementation record.** This is a point-in-time UX change summary,
+> not the source of truth for the current Study Web architecture. Use
+> [`docs/study-workflow-web-ui.md`](docs/study-workflow-web-ui.md) for current
+> service and operator behavior.
+
 ## Summary
 Successfully implemented high-impact UX improvements to the RF Validation Study Manager without major structural changes. The changes reduce information overload, normalize error messages, and provide immediate execution diagnostics.
 

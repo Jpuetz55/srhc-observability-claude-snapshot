@@ -1,37 +1,40 @@
-# Vocera WLC Evidence Contract
+# Vocera WLC evidence contract
 
-Each long-running manual WLC reproduction is one capture-session directory under:
+## Capture-session package (canonical)
+
+Every intermittent multicast reproduction uses one session directory:
 
 ```text
-/var/lib/vocera-media-qoe/raw/wlc-sessions/<study_id>/<session_id>/
+/var/lib/vocera-media-qoe/raw/wlc-sessions/<study-id>/<session-id>/
 ```
 
-Required files for a complete session:
+Expected structure:
 
 ```text
-session.json
-session-events.json
-attempts/attempt-markers.json
-cli/*.txt
-pcaps/<session>.pcap
-```
-
-Generated command sheets:
-
-```text
-clock-check.cli
+session.json                         immutable capture context; no passwords
+session-events.json                  operator event timeline
+attempts/attempt-markers.json        attempt/result lineage
+clock-check.cli                      generated command sheet
+baseline.cli
 start-long.cli
 start-short-validation.cli
+active-event.cli
+resolved-active-group.cli
+post-failure.cli
+ap-evidence.cli
 stop-export.cli
-active-state-snapshot.cli
 cleanup.cli
+cli/                                 preserved WLC transcripts when available
+incoming/                            WLC SCP landing area; never final evidence
+pcaps/                               stable, importer-promoted EPC artifacts
 ```
 
-`session.json` owns capture context: study, WLC, capture name, WLC interface,
-ring sizing, collector SCP host/user/path, sender, receiver, expected DSCP, and
-the Vocera multicast pool. It must not contain passwords.
+`session.json` records study/session identity, WLC, capture name/interface,
+filter mode, collector SCP host/user/port/path, ring sizing, sender/receiver,
+expected DSCP, multicast pool, and configured VLAN. It must never contain a
+password or secret token.
 
-`session-events.json` stores immutable operator markers:
+Allowed event/result values include:
 
 ```text
 broadcast_started
@@ -44,15 +47,32 @@ session_end
 note
 ```
 
-Result markers create attempt rows tied to the capture session.
+Result events create attempt records tied to the session. The event says what
+the operator observed; it is not a packet-level causality conclusion.
 
-Legacy attempt-only bundles remain supported under:
+## Managed EPC artifact lifecycle
 
 ```text
-/var/lib/vocera-media-qoe/raw/wlc-attempts/<study_id>/<attempt_id>/
+WLC SCP upload -> incoming/
+stable upload -> validated (container magic + SHA-256)
+validated -> atomically promoted to pcaps/
+pcaps artifact -> registered capture_point=wlc_epc -> parsed or retryable failure
 ```
 
-Required files for a complete legacy attempt:
+The artifact record retains file identity, size, SHA-256, ingest state, parser
+state, final path, and retry lineage. A retry must reuse the same promoted file
+and capture record; it must not duplicate an artifact/capture or reclassify the
+EPC as ICAP.
+
+## Legacy attempt-only package
+
+Older short-validation bundles remain supported under:
+
+```text
+/var/lib/vocera-media-qoe/raw/wlc-attempts/<study-id>/<attempt-id>/
+```
+
+Required legacy inputs:
 
 ```text
 manifest.json
@@ -63,23 +83,10 @@ cli/after.txt
 pcaps/wlc-epc.pcap
 ```
 
-Generated files:
-
-```text
-before.cli
-during.cli
-after.cli
-epc-start.cli
-epc-stop-export.cli
-cleanup.cli
-validation/ingest-report.json
-validation/attempt-import.sql
-pcaps/*.pcap.json
-```
-
-`manifest.json` owns attempt context: WLC, study, sender, receiver, VLAN, and
-artifact list. `operator-observation.json` owns human truth: alert heard, audio
-heard/missed/partial/choppy, operator, time, and notes.
+The legacy manifest owns WLC, study, sender/receiver, VLAN, and artifact
+context. `operator-observation.json` owns human truth: alert/audio result,
+operator, time, and notes. It is validated and ingested explicitly; it is not
+part of the automatic long-session SCP importer.
 
 Allowed `audio_result` values:
 
@@ -92,5 +99,5 @@ unknown
 not_tested
 ```
 
-The PCAP sidecar uses generic `capture_metadata`, not DNAC-only assumptions.
-DNAC ICAP sidecars remain supported separately.
+PCAP sidecars use generic capture metadata. Catalyst Center ICAP sidecars are
+separate and must remain distinguishable from manual WLC EPC evidence.

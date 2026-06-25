@@ -1,5 +1,9 @@
 # Badge SNR display fix
 
+> **Historical implementation record.** This documents the original Badge SNR
+> display correction. Current interpretation is governed by
+> [`wireless/vocera-badge-ekahau-rf-validation-methodology.md`](wireless/vocera-badge-ekahau-rf-validation-methodology.md).
+
 The Manual Survey Entry table was showing blank Badge SNR values for candidate AP rows because the correlator only attached `Radio signal info` SNR to the selected/connected candidate.
 
 For manual RF validation, Badge SNR is the badge-side associated-link SNR observed at the scan/survey timestamp. Candidate AP scan rows generally do not include per-BSSID SNR, so the correlator now:
