@@ -11,6 +11,15 @@ import vocera_multicast as multicast
 
 MAC_HEX_RE = re.compile(r"(?i)(?:[0-9a-f]{2}[:.-]?){5}[0-9a-f]{2}|[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}")
 IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+WLC_COMMAND_RE = re.compile(
+    r"^\s*(?:[A-Za-z0-9_.:/()-]+[>#]\s*)?"
+    r"("
+    r"(?:show|monitor\s+capture|no\s+monitor\s+capture|configure\s+terminal|"
+    r"ip\s+access-list|no\s+ip\s+access-list|terminal\s+length|end)"
+    r"\b.*"
+    r")$",
+    flags=re.IGNORECASE,
+)
 
 
 def normalize_mac(value: str | None) -> str | None:
@@ -38,7 +47,8 @@ def _first_match(patterns: tuple[str, ...], text: str) -> str | None:
     for pattern in patterns:
         match = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
         if match:
-            return match.group(1).strip()
+            value = match.group(1) if match.lastindex else match.group(0)
+            return value.strip()
     return None
 
 
@@ -62,6 +72,15 @@ def _is_multicast_group(value: str) -> bool:
     return 224 <= first <= 239
 
 
+def _command_from_line(line: str) -> str | None:
+    """Return a normalized WLC command echoed in a transcript line."""
+
+    match = WLC_COMMAND_RE.match(line)
+    if not match:
+        return None
+    return re.sub(r"\s+", " ", match.group(1).strip())
+
+
 def _show_blocks(text: str) -> list[tuple[str, str]]:
     """Return transcript blocks keyed by their leading `show ...` command."""
 
@@ -69,10 +88,11 @@ def _show_blocks(text: str) -> list[tuple[str, str]]:
     current_command: str | None = None
     current_lines: list[str] = []
     for line in text.splitlines():
-        if re.match(r"^\s*show\s+", line, flags=re.IGNORECASE):
+        command = _command_from_line(line)
+        if command and command.lower().startswith("show "):
             if current_command is not None:
                 blocks.append((current_command, current_lines))
-            current_command = line.strip()
+            current_command = command
             current_lines = [line]
         elif current_command is not None:
             current_lines.append(line)
@@ -119,6 +139,10 @@ def infer_transcript_phase(text: str) -> str:
     if has_group_detail:
         return "resolved_group"
     if re.search(r"show\s+wireless\s+multicast\s+group\s+summary", text, flags=re.IGNORECASE):
+        if re.search(r"mobility\s+history", text, flags=re.IGNORECASE) and re.search(
+            r"show\s+monitor\s+capture\s+\S+\s+buffer\s+brief", text, flags=re.IGNORECASE
+        ):
+            return "post_failure"
         if re.search(r"show\s+monitor\s+capture\s+\S+\s+buffer\s+brief", text, flags=re.IGNORECASE):
             return "active_event"
         if re.search(r"mobility\s+history|show\s+ap\s+multicast\s+mom", text, flags=re.IGNORECASE):
@@ -126,6 +150,64 @@ def infer_transcript_phase(text: str) -> str:
     if re.search(r"mobility\s+history", text, flags=re.IGNORECASE):
         return "post_failure"
     return "unassigned"
+
+
+def transcript_command_blocks(text: str) -> list[dict[str, Any]]:
+    """Split one output-only terminal log into generated-sheet command blocks.
+
+    Generated WLC command sheets start with ``terminal length 0``. Use that
+    operator-visible boundary to keep baseline, active-event, resolved-group,
+    stop/export, post-failure, and cleanup evidence separate while still
+    preserving the original terminal transcript as one artifact.
+    """
+
+    blocks: list[dict[str, Any]] = []
+    current_lines: list[str] = []
+    commands: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_lines, commands
+        if not commands:
+            current_lines = []
+            return
+        block_text = "\n".join(current_lines).strip()
+        if not block_text:
+            current_lines = []
+            commands = []
+            return
+        block_index = len(blocks)
+        phase = infer_transcript_phase(block_text)
+        blocks.append(
+            {
+                "block_index": block_index,
+                "block_id": f"block-{block_index:04d}",
+                "phase": phase,
+                "commands": list(commands),
+                "attempt_ids": extract_attempt_ids(block_text),
+                "text": block_text,
+            }
+        )
+        current_lines = []
+        commands = []
+
+    for line in text.splitlines():
+        command = _command_from_line(line)
+        if command and re.match(r"terminal\s+length\s+0\b", command, flags=re.IGNORECASE):
+            flush()
+            current_lines = [line]
+            commands = [command]
+            continue
+        if command:
+            if not current_lines:
+                current_lines = [line]
+            else:
+                current_lines.append(line)
+            commands.append(command)
+            continue
+        if current_lines:
+            current_lines.append(line)
+    flush()
+    return blocks
 
 
 def _group_detail_blocks(text: str) -> list[str]:
@@ -315,6 +397,24 @@ def parse_wlc_snapshot(
     group = _first_match((r"^\s*Group\s*:\s*((?:\d{1,3}\.){3}\d{1,3})\s*$",), group_detail_text)
     vlan = _int_or_none(_first_match((r"^\s*Vlan\s*:\s*(\d+)\s*$",), group_detail_text))
     mgid = _int_or_none(_first_match((r"^\s*MGID\s*:\s*(\d+)\s*$",), group_detail_text))
+    command_group = _first_match(
+        (
+            r"\bshow\s+wireless\s+multicast\s+group\s+((?:\d{1,3}\.){3}\d{1,3})\s+vlan\s+\d+",
+            r"\bshow\s+wireless\s+multicast\s+source\s+\S+\s+group\s+((?:\d{1,3}\.){3}\d{1,3})\s+vlan\s+\d+",
+        ),
+        group_detail_text,
+    )
+    command_vlan = _int_or_none(
+        _first_match(
+            (
+                r"\bshow\s+wireless\s+multicast\s+group\s+(?:\d{1,3}\.){3}\d{1,3}\s+vlan\s+(\d+)",
+                r"\bshow\s+wireless\s+multicast\s+source\s+\S+\s+group\s+(?:\d{1,3}\.){3}\d{1,3}\s+vlan\s+(\d+)",
+            ),
+            group_detail_text,
+        )
+    )
+    group = group or command_group
+    vlan = vlan if vlan is not None else command_vlan
     if not group and groups:
         candidates = [item for item in groups if expected_vlan is None or item.get("vlan") == expected_vlan]
         selected = candidates[0] if candidates else groups[0]
