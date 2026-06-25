@@ -202,6 +202,118 @@ monitor capture VOCERA_260625_1200_A1B2 export scp://appsadmin@10.0.128.107//var
     require(wlc_cli.extract_attempt_ids("! Attempt: <unbound>") == [], "unbound marker must not associate evidence")
 
 
+def test_terminal_transcript_command_blocks() -> None:
+    """Split one logged terminal session into evidence phases."""
+
+    transcript = """
+WLC#terminal length 0
+WLC#show clock detail
+08:00:00.000 CDT Thu Jun 25 2026
+WLC#show wireless client mac-address 00:09:ef:61:0b:f7 detail
+VLAN : 688
+Multicast VLAN : 688
+AP name : SFB-TSG
+Channel : 6
+RSSI : -58
+SNR : 31
+WLC#show wireless client mac-address 00:09:ef:61:0b:f7 mobility history
+No mobility events
+WLC#show wireless multicast group summary
+MGID  Group          VLAN
+4160  230.230.0.5   684
+WLC#show ap multicast mom
+AP Name  Status
+SFB-TSG  Up
+WLC#show monitor capture VOCERA_260625_0800_A1B2
+Status: Inactive
+WLC#terminal length 0
+WLC#show clock detail
+08:00:05.000 CDT Thu Jun 25 2026
+WLC#monitor capture VOCERA_260625_0800_A1B2 interface Port-channel 1 both
+WLC#monitor capture VOCERA_260625_0800_A1B2 buffer circular file 5 file-size 100
+WLC#monitor capture VOCERA_260625_0800_A1B2 start
+WLC#show monitor capture VOCERA_260625_0800_A1B2
+Status: Active
+WLC#terminal length 0
+WLC#show clock detail
+08:01:00.000 CDT Thu Jun 25 2026
+WLC#show wireless client mac-address 00:09:ef:61:0b:f7 detail
+AP name : SFB-TSG
+WLC#show wireless multicast group summary
+MGID  Group          VLAN
+4160  230.230.0.5   684
+WLC#show monitor capture VOCERA_260625_0800_A1B2 buffer brief
+Packets: 120
+WLC#terminal length 0
+! Attempt: attempt-abc123
+! Configured default VLAN: 684
+! Resolved active group VLAN: 684
+WLC#show clock detail
+08:01:05.000 CDT Thu Jun 25 2026
+WLC#show wireless multicast group 230.230.0.5 vlan 684
+Client List
+Client MAC           Status
+00:09:ef:61:0b:f7   Forward
+WLC#show wireless multicast source 0.0.0.0 group 230.230.0.5 vlan 684
+MGID: 4160
+WLC#show monitor capture VOCERA_260625_0800_A1B2 buffer brief
+Packets: 140
+WLC#terminal length 0
+WLC#show clock detail
+08:01:10.000 CDT Thu Jun 25 2026
+WLC#show monitor capture VOCERA_260625_0800_A1B2
+Status: Active
+WLC#monitor capture VOCERA_260625_0800_A1B2 stop
+WLC#monitor capture VOCERA_260625_0800_A1B2 export scp://appsadmin@10.0.128.107//var/lib/vocera-media-qoe/raw/wlc-sessions/study/session/incoming/session.pcap
+WLC#terminal length 0
+WLC#show clock detail
+08:01:20.000 CDT Thu Jun 25 2026
+WLC#show wireless client mac-address 00:09:ef:61:0b:f7 detail
+AP name : SFB-TSG
+WLC#show wireless client mac-address 00:09:ef:61:0b:f7 mobility history
+No mobility events
+WLC#show wireless multicast group summary
+MGID  Group          VLAN
+4160  230.230.0.5   684
+WLC#show monitor capture VOCERA_260625_0800_A1B2 buffer brief
+Packets: 150
+WLC#terminal length 0
+WLC#show monitor capture VOCERA_260625_0800_A1B2
+Status: Stopped
+WLC#no monitor capture VOCERA_260625_0800_A1B2
+WLC(config)#no ip access-list extended VOCERA_EPC_TMP
+"""
+    blocks = wlc_cli.transcript_command_blocks(transcript)
+    phases = [block["phase"] for block in blocks]
+    require(
+        phases == [
+            "baseline",
+            "capture_start",
+            "active_event",
+            "resolved_group",
+            "capture_stop_export",
+            "post_failure",
+            "cleanup",
+        ],
+        f"unexpected transcript phases: {phases}",
+    )
+    resolved = blocks[3]
+    require(resolved["attempt_ids"] == ["attempt-abc123"], "resolved block should retain explicit attempt marker")
+    require(
+        "show wireless multicast group 230.230.0.5 vlan 684" in resolved["commands"],
+        "resolved commands should be retained",
+    )
+    parsed = wlc_cli.parse_wlc_snapshot(
+        str(resolved["text"]),
+        phase=str(resolved["phase"]),
+        receiver_mac="00:09:ef:61:0b:f7",
+        expected_vlan=684,
+    )
+    require(parsed.get("c1000_group_member") is True, "resolved block should parse receiver membership")
+    require(parsed.get("vocera_dynamic_group_ip") == "230.230.0.5", "resolved block should parse dynamic group")
+    require(parsed.get("resolved_group_vlan") == 684, "resolved block should parse resolved VLAN")
+
+
 def main() -> int:
     """Run standalone tests."""
 
@@ -210,6 +322,7 @@ def main() -> int:
     test_vlan_context_mismatch_does_not_overwrite_configured_vlan()
     test_ap_mgid_snapshot()
     test_transcript_phase_and_attempt_marker()
+    test_terminal_transcript_command_blocks()
     print("OK: WLC CLI evidence parser tests passed")
     return 0
 
