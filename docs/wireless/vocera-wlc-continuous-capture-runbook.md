@@ -222,15 +222,18 @@ with mode `0750`, because the root-owned ingest service and the unprivileged
 SCP account have different duties. Before a live export, verify that account can
 write the exact `incoming/` path; do not loosen the whole package or export
 directly to `pcaps/`. A file in `incoming/` means
-"upload in progress or pending validation"; `pcaps/` means "stable, validated
-session evidence".
+"upload in progress or pending validation"; `pcaps/` means "stable, validated,
+service-owned session evidence". See
+[`vocera-wlc-phase0-production-contract.md`](vocera-wlc-phase0-production-contract.md)
+for the production ownership and timer-enable contract.
 
 A one-minute collector timer (`vocera-media-qoe-wlc-session-ingest.timer`) runs
 the import with no operator action:
 
 1. Detect a completed upload (size and mtime unchanged across timer ticks).
-2. Validate the pcap/pcapng container by magic bytes and hash it (SHA-256).
-3. Atomically promote `incoming/<file>` to `pcaps/<file>`.
+2. Validate filesystem safety and the pcap/pcapng container.
+3. Copy into a service-created temp file, hash it, fsync it, set final
+   ownership/mode, atomically rename it into `pcaps/`, and verify SHA-256.
 4. Register it as a capture with `capture_point=wlc_epc`.
 5. Run the existing media QoE parser once.
 6. Classify what the EPC can and cannot prove (`inner_voice_visible`,
@@ -246,7 +249,7 @@ UI reads artifact status through the `GET` route; it never triggers a scan.
 ### Isolation from the generic ICAP path
 
 The WLC session ingest is the **only** automated path that processes WLC session
-EPCs. The generic Vocera media ICAP pipeline must never re-discover a promoted
+EPCs. The generic Vocera media ICAP pipeline must never re-discover a finalized
 session EPC, or it would be double-parsed and mislabeled as ordinary ICAP
 evidence. Two guards enforce this and must stay in place:
 
@@ -268,8 +271,8 @@ capture name by any non-terminal session.
 
 ### Recovery
 
-Promotion to `pcaps/` happens before registration and parsing. If a transient
-database or parser error fails after promotion, the artifact is left in
+Finalization to `pcaps/` happens before registration and parsing. If a transient
+database or parser error fails after finalization, the artifact is left in
 `promoted`, `registered`, `retry_pending`, or `failed` state with its `pcaps/`
 path recorded, and the same timer automatically retries it (reusing the existing
 capture, never moving files or re-importing) until it parses or a bounded retry
