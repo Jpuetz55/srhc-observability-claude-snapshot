@@ -5102,6 +5102,26 @@ def media_wlc_ingest_stability_seconds() -> int:
         return 15
 
 
+def media_wlc_ingest_max_bytes() -> int:
+    """Maximum accepted WLC EPC upload size before quarantine."""
+
+    raw = os.environ.get("STUDY_WEB_MEDIA_QOE_WLC_INGEST_MAX_BYTES", str(wlc_ingest.DEFAULT_MAX_UPLOAD_BYTES)).strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return wlc_ingest.DEFAULT_MAX_UPLOAD_BYTES
+
+
+def media_wlc_ingest_min_free_bytes() -> int:
+    """Minimum free bytes that must remain after finalizing an EPC."""
+
+    raw = os.environ.get("STUDY_WEB_MEDIA_QOE_WLC_INGEST_MIN_FREE_BYTES", str(wlc_ingest.DEFAULT_MIN_FREE_BYTES)).strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return wlc_ingest.DEFAULT_MIN_FREE_BYTES
+
+
 def media_wlc_validate_session_capture(path_text: str, *, subdir: str) -> Path:
     """Validate a file inside a WLC session package's incoming/ or pcaps/ dir.
 
@@ -5349,11 +5369,11 @@ def media_wlc_process_incoming(
     session_root: Path,
     stability_seconds: int,
 ) -> dict[str, Any]:
-    """Detect, validate, promote, register, and parse one incoming EPC.
+    """Detect, finalize, register, and parse one incoming EPC.
 
     Idempotent and timer-driven: an upload still in flight is recorded as
     ``upload_detected`` and revisited on the next scan; only a file unchanged for
-    ``stability_seconds`` is hashed, atomically promoted into ``pcaps/``,
+    ``stability_seconds`` is finalized into a service-owned ``pcaps/`` artifact,
     registered as a ``wlc_epc`` capture, and parsed by the shared executor.
     """
 
@@ -5400,21 +5420,52 @@ def media_wlc_process_incoming(
         return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
                 "state": "waiting_for_stability", "decision": decision}
 
-    # decision == ready: validate container, hash, promote, register, parse.
+    # decision == ready: finalize into pcaps/, register, parse. Finalization
+    # copies into a service-created root-owned file instead of renaming the
+    # SCP upload, because rename would preserve the upload account's ownership
+    # and could leave finalized evidence writable by that account.
     media_wlc_upsert_artifact(*base, ingest_state="validating", size_bytes=current_sig["size_bytes"])
-    if not wlc_ingest.looks_like_pcap(incoming_pcap):
+    final = wlc_ingest.promoted_path(session_root, incoming_pcap)
+    if final is None:
         media_wlc_upsert_artifact(
-            *base, ingest_state="quarantined",
-            error_message="File is not a pcap or pcapng capture container.",
+            *base, ingest_state="failed",
+            error_message="Could not resolve the pcaps/ destination for this upload.",
+            metadata={"failure_category": wlc_ingest.FAIL_PROMOTION_COPY_FAILED},
         )
-        return {"artifact_id": artifact_id, "session_id": session_id, "name": name, "state": "quarantined"}
+        return {"artifact_id": artifact_id, "session_id": session_id, "name": name, "state": "failed"}
+    try:
+        finalization = wlc_ingest.finalize_upload_to_pcaps(
+            incoming_pcap,
+            final,
+            max_bytes=media_wlc_ingest_max_bytes(),
+            min_free_bytes=media_wlc_ingest_min_free_bytes(),
+        )
+    except wlc_ingest.IngestFinalizationError as exc:
+        state = "quarantined" if exc.category in wlc_ingest.SOURCE_QUARANTINE_REASONS else "failed"
+        media_wlc_upsert_artifact(
+            *base,
+            ingest_state=state,
+            size_bytes=current_sig["size_bytes"],
+            error_message=exc.message,
+            metadata={"failure_category": exc.category, "failure": exc.metadata},
+        )
+        return {
+            "artifact_id": artifact_id,
+            "session_id": session_id,
+            "name": name,
+            "state": state,
+            "failure_category": exc.category,
+            "detail": exc.message,
+        }
 
-    sha = wlc_ingest.sha256_file(incoming_pcap)
-    visibility = media_wlc_epc_visibility(incoming_pcap, session_id)
+    final_path = Path(str(finalization["final_path"]))
+    sha = str(finalization["sha256"])
+    final_size = int(finalization["size_bytes"])
+    visibility = media_wlc_epc_visibility(final_path, session_id)
     media_wlc_upsert_artifact(
-        *base, ingest_state="validated", sha256=sha, size_bytes=current_sig["size_bytes"],
+        *base, ingest_state="validated", final_path=str(final_path), sha256=sha, size_bytes=final_size,
         validated_at=True, visibility_class=visibility.get("visibility_class"),
-        metadata={"visibility": visibility},
+        metadata={"visibility": visibility, "finalization": finalization},
     )
     dup = media_query_rows(
         "select artifact_id, capture_id from vocera_media_session_artifacts "
@@ -5424,71 +5475,64 @@ def media_wlc_process_incoming(
     )
     if dup:
         media_wlc_upsert_artifact(
-            *base, ingest_state="parsed", sha256=sha, capture_id=dup[0].get("capture_id"),
+            *base, ingest_state="parsed", final_path=str(final_path), sha256=sha, capture_id=dup[0].get("capture_id"),
             parser_status="duplicate", validated_at=True,
-            metadata={"duplicate_of": dup[0].get("artifact_id")},
+            metadata={"duplicate_of": dup[0].get("artifact_id"), "finalization": finalization},
         )
         return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
                 "state": "parsed", "detail": "duplicate content"}
 
-    final = wlc_ingest.promoted_path(session_root, incoming_pcap)
-    if final is None:
-        media_wlc_upsert_artifact(*base, ingest_state="failed", sha256=sha,
-                                  error_message="Could not resolve the pcaps/ destination for this upload.")
-        return {"artifact_id": artifact_id, "session_id": session_id, "name": name, "state": "failed"}
-    try:
-        wlc_ingest.atomic_move(incoming_pcap, final)
-    except OSError as exc:
-        media_wlc_upsert_artifact(*base, ingest_state="failed", sha256=sha,
-                                  error_message=f"Atomic promotion into pcaps/ failed: {exc}")
-        return {"artifact_id": artifact_id, "session_id": session_id, "name": name, "state": "failed"}
-
     media_wlc_upsert_artifact(
-        *base, ingest_state="promoted", final_path=str(final), sha256=sha,
-        size_bytes=current_sig["size_bytes"], validated_at=True,
-        visibility_class=visibility.get("visibility_class"), metadata={"visibility": visibility},
+        *base, ingest_state="promoted", final_path=str(final_path), sha256=sha,
+        size_bytes=final_size, validated_at=True,
+        visibility_class=visibility.get("visibility_class"), metadata={"visibility": visibility, "finalization": finalization},
     )
 
     try:
-        validated = media_wlc_validate_session_capture(str(final), subdir=wlc_ingest.PCAPS_SUBDIR)
+        validated = media_wlc_validate_session_capture(str(final_path), subdir=wlc_ingest.PCAPS_SUBDIR)
         registration = media_register_capture_record(
             study_id, validated, capture_point="wlc_epc",
             source_name=name, notes="WLC capture-session EPC auto-ingest.",
         )
     except HTTPException as exc:
-        media_wlc_upsert_artifact(*base, ingest_state="failed", final_path=str(final),
-                                  error_message=str(exc.detail))
+        media_wlc_upsert_artifact(*base, ingest_state="failed", final_path=str(final_path),
+                                  error_message=str(exc.detail),
+                                  metadata={"failure_category": wlc_ingest.FAIL_CAPTURE_REGISTRATION_FAILED})
         return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
                 "state": "failed", "detail": str(exc.detail)}
     capture_id = registration["capture_id"]
     media_wlc_upsert_artifact(
-        *base, ingest_state="registered", final_path=str(final), capture_id=capture_id,
+        *base, ingest_state="registered", final_path=str(final_path), capture_id=capture_id,
         visibility_class=visibility.get("visibility_class"),
     )
 
     if not media_execution_enabled():
         media_wlc_upsert_artifact(
-            *base, ingest_state="imported", final_path=str(final), capture_id=capture_id,
+            *base, ingest_state="imported", final_path=str(final_path), capture_id=capture_id,
             parser_status="execution_disabled",
         )
         return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
                 "state": "imported", "capture_id": capture_id, "detail": "parser execution disabled"}
 
-    media_wlc_upsert_artifact(*base, ingest_state="parsing", final_path=str(final), capture_id=capture_id)
+    media_wlc_upsert_artifact(*base, ingest_state="parsing", final_path=str(final_path), capture_id=capture_id)
     try:
         parse = media_run_capture_parse(capture_id, study_id, validated, requested_by="wlc-session-ingest")
     except HTTPException as exc:
         media_wlc_upsert_artifact(*base, ingest_state="failed", capture_id=capture_id,
-                                  parser_status="failed", error_message=str(exc.detail))
+                                  parser_status="failed", error_message=str(exc.detail),
+                                  metadata={"failure_category": wlc_ingest.FAIL_PARSER_FAILED})
         return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
                 "state": "failed", "capture_id": capture_id, "detail": str(exc.detail)}
 
     status = parse.get("status")
     final_state = "parsed" if status == "complete" else "failed"
+    metadata = {"parse_run_id": parse.get("parse_run_id"), "summary": parse.get("summary")}
+    if final_state == "failed":
+        metadata["failure_category"] = wlc_ingest.FAIL_PARSER_FAILED
     media_wlc_upsert_artifact(
         *base, ingest_state=final_state, capture_id=capture_id, parser_status=status,
         error_message=parse.get("error"),
-        metadata={"parse_run_id": parse.get("parse_run_id"), "summary": parse.get("summary")},
+        metadata=metadata,
     )
     return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
             "state": final_state, "capture_id": capture_id, "parse_run_id": parse.get("parse_run_id")}
@@ -5498,7 +5542,7 @@ WLC_INGEST_MAX_RETRIES = 5
 
 
 def media_wlc_retry_one(row: dict[str, str]) -> dict[str, Any]:
-    """Re-drive one promoted-but-unparsed WLC EPC artifact.
+    """Re-drive one finalized-but-unparsed WLC EPC artifact.
 
     Reuses the existing capture_id when present (never re-imports or duplicates),
     never moves files, and bounds runaway retries of a deterministically-failing
@@ -5518,6 +5562,12 @@ def media_wlc_retry_one(row: dict[str, str]) -> dict[str, Any]:
     base = (artifact_id, session_id, "wlc_epc", final_path, name)
 
     if retry_count >= WLC_INGEST_MAX_RETRIES:
+        media_wlc_upsert_artifact(
+            *base,
+            ingest_state="failed",
+            error_message="Retry limit reached; manual intervention required.",
+            metadata={"retry_count": retry_count, "failure_category": wlc_ingest.FAIL_RETRY_LIMIT_REACHED},
+        )
         return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
                 "state": "failed", "detail": "retry limit reached; manual intervention required"}
 
@@ -5525,10 +5575,11 @@ def media_wlc_retry_one(row: dict[str, str]) -> dict[str, Any]:
         validated = media_wlc_validate_session_capture(final_path, subdir=wlc_ingest.PCAPS_SUBDIR)
     except HTTPException as exc:
         media_wlc_upsert_artifact(*base, ingest_state="failed",
-                                  error_message=f"Promoted file unavailable for retry: {exc.detail}",
-                                  metadata={"retry_count": retry_count + 1})
+                                  error_message=f"Finalized file unavailable for retry: {exc.detail}",
+                                  metadata={"retry_count": retry_count + 1,
+                                            "failure_category": wlc_ingest.FAIL_PROMOTION_COPY_FAILED})
         return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
-                "state": "failed", "detail": "promoted file unavailable"}
+                "state": "failed", "detail": "finalized file unavailable"}
 
     session_rows = media_query_rows(
         "select study_id from v_vocera_media_capture_sessions "
@@ -5545,7 +5596,8 @@ def media_wlc_retry_one(row: dict[str, str]) -> dict[str, Any]:
             capture_id = registration["capture_id"]
         except HTTPException as exc:
             media_wlc_upsert_artifact(*base, ingest_state="failed", error_message=str(exc.detail),
-                                      metadata={"retry_count": retry_count + 1})
+                                      metadata={"retry_count": retry_count + 1,
+                                                "failure_category": wlc_ingest.FAIL_CAPTURE_REGISTRATION_FAILED})
             return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
                     "state": "failed", "detail": str(exc.detail)}
 
@@ -5561,7 +5613,8 @@ def media_wlc_retry_one(row: dict[str, str]) -> dict[str, Any]:
             return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
                     "state": "retry_pending", "detail": "parser busy; will retry next tick"}
         media_wlc_upsert_artifact(*base, ingest_state="failed", capture_id=capture_id, parser_status="failed",
-                                  error_message=str(exc.detail), metadata={"retry_count": retry_count + 1})
+                                  error_message=str(exc.detail), metadata={"retry_count": retry_count + 1,
+                                                                           "failure_category": wlc_ingest.FAIL_PARSER_FAILED})
         return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
                 "state": "failed", "detail": str(exc.detail)}
 
@@ -5570,6 +5623,7 @@ def media_wlc_retry_one(row: dict[str, str]) -> dict[str, Any]:
     metadata = {"parse_run_id": parse.get("parse_run_id"), "summary": parse.get("summary")}
     if final_state == "failed":
         metadata["retry_count"] = retry_count + 1
+        metadata["failure_category"] = wlc_ingest.FAIL_PARSER_FAILED
     media_wlc_upsert_artifact(*base, ingest_state=final_state, capture_id=capture_id,
                               parser_status=status, error_message=parse.get("error"), metadata=metadata)
     return {"artifact_id": artifact_id, "session_id": session_id, "name": name,
@@ -5581,13 +5635,14 @@ def media_wlc_retry_promoted_artifacts(
     session_id: str | None = None,
     exclude_artifact_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Re-drive WLC EPC artifacts stuck after promotion (register/parse failed).
+    """Re-drive WLC EPC artifacts stuck after finalization (register/parse failed).
 
-    Promotion into pcaps/ happens before registration and parsing, so a transient
-    DB/parser failure leaves the file in pcaps/ -- where the incoming scan never
-    revisits it -- in state imported/failed. Quarantined and parsed artifacts are
-    terminal and are not retried. Artifacts already handled in this same scan pass
-    (``exclude_artifact_ids``) are skipped so they are not retried twice per tick.
+    Finalization into pcaps/ happens before registration and parsing, so a
+    transient DB/parser failure leaves the service-owned file in pcaps/ -- where
+    the incoming scan never revisits it -- in state imported/failed. Quarantined
+    and parsed artifacts are terminal and are not retried. Artifacts already
+    handled in this same scan pass (``exclude_artifact_ids``) are skipped so they
+    are not retried twice per tick.
     """
 
     if not media_execution_enabled():
@@ -5933,8 +5988,8 @@ def media_wlc_transcript_scan(*, session_id: str | None = None) -> list[dict[str
 def media_wlc_ingest_scan(*, session_id: str | None = None) -> dict[str, Any]:
     """Scan every session package's incoming/ once and ingest stable EPCs.
 
-    A second pass re-drives any artifact stranded after promotion so a transient
-    failure recovers automatically without an operator moving files.
+    A second pass re-drives any artifact stranded after finalization so a
+    transient failure recovers automatically without an operator moving files.
     """
 
     root = media_wlc_session_root()
