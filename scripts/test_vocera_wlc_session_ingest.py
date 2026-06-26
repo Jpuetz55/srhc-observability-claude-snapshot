@@ -375,11 +375,27 @@ def test_study_web_ingest_contract() -> None:
 
 def test_session_artifact_schema_contract() -> None:
     schema = (ROOT / "sql" / "vocera_media_qoe_schema.sql").read_text(encoding="utf-8")
+    views = (ROOT / "sql" / "vocera_media_qoe_views.sql").read_text(encoding="utf-8")
     require("create table if not exists schema_migrations" in schema, "media schema should include the migration ledger")
+    require("create table if not exists vocera_media_capture_legs" in schema, "missing AP-OTA capture-leg table")
+    require("leg_type in ('wlc_epc', 'ap_client_ota', 'wired_vlan_span', 'icap_ota')" in schema, "capture legs must allow AP-OTA leg type")
+    require("target_client_mac text" in schema and "target_ap_name text" in schema, "capture legs must store target client/AP evidence")
+    require("create or replace view v_vocera_media_capture_legs" in views, "missing capture-leg view")
+    require("ap_ota_leg_count" in views, "session view should expose AP-OTA leg counts")
     require("create table if not exists vocera_media_session_artifacts" in schema, "missing session-artifact table")
     require("capture_session_id text not null references vocera_media_capture_sessions(session_id) on delete cascade" in schema, "artifacts must belong to a capture session")
+    require("capture_leg_id text references vocera_media_capture_legs(leg_id) on delete set null" in schema, "artifacts should optionally attach to a capture leg")
     require("capture_id text references vocera_media_captures(capture_id) on delete set null" in schema, "artifacts should link to the registered capture")
-    for kind in ("wlc_epc", "wlc_terminal_output", "wlc_terminal_timing", "wlc_transcript"):
+    for kind in (
+        "wlc_epc",
+        "wlc_terminal_output",
+        "wlc_terminal_timing",
+        "wlc_transcript",
+        "ap_ota_pcap",
+        "ap_ota_terminal_output",
+        "ap_ota_terminal_timing",
+        "ap_ota_metadata",
+    ):
         require(kind in schema, f"artifact_kind {kind} must be allowed")
     for state in (
         "waiting_for_export",
@@ -405,6 +421,7 @@ def test_migration_framework_contract() -> None:
     migration_dir = ROOT / "sql" / "migrations"
     ledger = (migration_dir / "20260625_001_schema_migrations.sql").read_text(encoding="utf-8")
     artifacts = (migration_dir / "20260625_002_phase0_session_artifacts.sql").read_text(encoding="utf-8")
+    ap_ota = (migration_dir / "20260626_004_ap_ota_capture_legs.sql").read_text(encoding="utf-8")
     runner = (ROOT / "scripts" / "apply_vocera_media_qoe_migrations.py").read_text(encoding="utf-8")
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
 
@@ -413,6 +430,9 @@ def test_migration_framework_contract() -> None:
     require("source_commit text not null" in ledger, "migration ledger must record source commit")
     require("create table if not exists vocera_media_session_artifacts" in artifacts, "Phase 0 artifact migration missing table")
     require("uq_vocera_media_session_artifacts_session_sha" in artifacts, "Phase 0 migration must preserve duplicate-content guard")
+    require("create table if not exists vocera_media_capture_legs" in ap_ota, "AP-OTA migration must create capture legs")
+    require("ap_ota_pcap" in ap_ota and "capture_leg_id" in ap_ota, "AP-OTA migration must extend session artifacts")
+    require("create or replace view v_vocera_media_capture_sessions" in ap_ota, "AP-OTA migration must append session leg counts")
     require("sha256_file(path)" in runner, "migration runner must checksum migration files")
     require("checksum mismatch" in runner, "migration runner must reject edited applied migrations")
     require("schema_migrations" in runner, "migration runner must use the migration ledger")
@@ -475,8 +495,18 @@ def test_isolation_and_hardening_contract() -> None:
     require("VOCERA_MEDIA_QOE_BATCH_EXCLUDE_DIRS=wlc-sessions,wlc-attempts" in textfile_service, "textfile service must set the WLC exclusion env")
     # Capture name is blank by default; the server generates a unique one.
     require('capture_name: ""' in config_text, "config capture_name must be blank so a unique name is generated")
+    require("wlc_ssh_host:" in config_text and "wlc_ssh_port:" in config_text, "config must separate WLC SSH endpoint from display name")
+    require("ap_ota_capture:" in config_text, "config must include AP-OTA feasibility defaults")
+    require("target_client_mac: 00:09:ef:61:0b:f7" in config_text, "AP-OTA target must default to the C1000 receiver")
+    require("ftp_drop_dir: /var/lib/vocera-media-qoe/ap-ota-drop" in config_text, "AP-OTA FTP drop zone must be separate from WLC session incoming")
     require('"capture_name": wlc.get("capture_name") or ""' in main_text, "Study Web defaults must not prefill a static capture name")
+    require('"wlc_ssh_host": wlc.get("wlc_ssh_host") or ""' in main_text, "Study Web defaults must expose separate WLC SSH host")
+    require('@app.get("/api/media-qoe/ap-ota/preflight")' in main_text, "Study Web must expose AP-OTA preflight")
+    require('@app.post("/api/media-qoe/wlc/sessions/{session_id}/ap-ota-legs")' in main_text, "Study Web must expose AP-OTA leg creation")
+    require("AP-OTA capture leg cannot be prepared until preflight blockers are resolved" in main_text, "AP-OTA creation must be preflight gated")
+    require("Client-MAC filtering may not retain every group-addressed multicast frame" in main_text, "AP-OTA evidence claim boundary must be recorded")
     require("WLC_CAPTURE_NAME ?=\n" in makefile or "WLC_CAPTURE_NAME ?= \n" in makefile, "Makefile WLC capture name must default blank")
+    require("WLC_SSH_HOST ?= $(WLC_NAME)" not in makefile, "Makefile WLC SSH host must not default to the display name")
     require("VOCERA_CAPTURE" not in makefile, "Makefile must not default to a static VOCERA_CAPTURE name")
     require("$(if $(strip $(WLC_CAPTURE_NAME)),--capture-name" in makefile, "Makefile must only pass --capture-name when set")
     # Generic raw-file imports use a neutral capture point, not ICAP.
