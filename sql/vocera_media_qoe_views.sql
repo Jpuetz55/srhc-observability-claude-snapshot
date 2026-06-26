@@ -133,7 +133,8 @@ select
   coalesce(c.udp_packets_seen, 0)::bigint as udp_packets_seen,
   s.created_at,
   s.updated_at,
-  s.deleted_at
+  s.deleted_at,
+  s.study_type
 from vocera_studies s
 join vocera_projects p
   on p.project_id = s.project_id
