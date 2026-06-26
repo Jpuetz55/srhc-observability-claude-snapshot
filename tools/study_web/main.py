@@ -4278,6 +4278,71 @@ def get_media_qoe_summary() -> dict[str, Any]:
     }
 
 
+@app.get("/api/media-qoe/projects")
+def list_media_qoe_projects(include_deleted: bool = False) -> dict[str, Any]:
+    filters = []
+    if not include_deleted:
+        filters.append("deleted_at is null")
+    filters.append("project_type in ('media_qoe', 'mixed')")
+    where = f"where {' and '.join(filters)} " if filters else ""
+    rows = media_query_rows(
+        "select * from v_vocera_media_qoe_projects "
+        f"{where}"
+        "order by deleted_at nulls first, project_name, project_id;"
+    )
+    return {"ok": True, "projects": rows}
+
+
+@app.post("/api/media-qoe/projects")
+def create_media_qoe_project(payload: ProjectCreate) -> dict[str, Any]:
+    if payload.project_type not in {"media_qoe", "mixed"}:
+        raise HTTPException(status_code=400, detail="Media QoE projects must use media_qoe or mixed project_type.")
+    project_id = payload.project_id or new_entity_id("project")
+    row = media_query_one(
+        "insert into vocera_projects (project_id, project_name, project_type, description, site, updated_at) "
+        f"values ({sql_text(project_id)}, {sql_text(payload.project_name)}, {sql_text(payload.project_type)}, "
+        f"{sql_text(payload.description)}, {sql_text(payload.site)}, now()) "
+        "returning project_id;"
+    )
+    return {"ok": True, "project": media_project_row(row.get("project_id") or project_id)}
+
+
+@app.get("/api/media-qoe/projects/{project_id}/studies")
+def list_media_qoe_project_studies(project_id: str, include_deleted: bool = False) -> dict[str, Any]:
+    validate_media_project_id(project_id)
+    rows = media_query_rows(
+        "select * from v_vocera_media_qoe_studies "
+        f"where project_id = {sql_text(project_id)} "
+        f"{'' if include_deleted else 'and deleted_at is null '} "
+        "and study_type = 'media_qoe' "
+        "order by deleted_at nulls first, study_name, study_id;"
+    )
+    return {"ok": True, "studies": rows}
+
+
+@app.post("/api/media-qoe/projects/{project_id}/studies")
+def create_media_qoe_project_study(project_id: str, payload: StudyCreate) -> dict[str, Any]:
+    validate_media_project_id(project_id)
+    if payload.study_type != "media_qoe":
+        raise HTTPException(status_code=400, detail="Media QoE projects may contain only media_qoe studies.")
+    study_scope = payload.study_scope or "media_qoe"
+    if study_scope != "media_qoe":
+        raise HTTPException(status_code=400, detail="Media QoE studies must use media_qoe scope.")
+    study_id = payload.study_id or new_entity_id("study")
+    row = media_query_one(
+        "insert into vocera_studies (study_id, project_id, study_type, study_scope, study_name, description, study_status, updated_at) "
+        f"values ({sql_text(study_id)}, {sql_text(project_id)}, {sql_text('media_qoe')}, {sql_text('media_qoe')}, "
+        f"{sql_text(payload.study_name)}, {sql_text(payload.description)}, {sql_text(payload.study_status)}, now()) "
+        "returning study_id;"
+    )
+    return {"ok": True, "study": media_study_row(row.get("study_id") or study_id)}
+
+
+@app.get("/api/media-qoe/studies/{study_id}")
+def get_media_qoe_study(study_id: str, include_deleted: bool = False) -> dict[str, Any]:
+    return {"ok": True, "study": media_study_row(study_id, include_deleted=include_deleted)}
+
+
 @app.get("/api/media-qoe/execution/status")
 def get_media_qoe_execution_status() -> dict[str, Any]:
     configured = os.environ.get("STUDY_WEB_MEDIA_QOE_RAW_DIR", "/var/lib/vocera-media-qoe/raw").strip()
