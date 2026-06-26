@@ -135,10 +135,28 @@ def session_dir(root: Path, study_id: str, session_id: str) -> Path:
     return root / study_id / session_id
 
 
-def acl_name(capture_name: str) -> str:
-    """Return the temporary capture ACL name."""
+# Observed WLC-safe maximum length for a temporary EPC ACL name. The controller
+# silently truncates or rejects longer named-ACL references, which would break
+# the `monitor capture ... access-list <name>` binding and the matching cleanup
+# `no ip access-list extended <name>`. Keep this one char under the 32-char
+# capture-name class so the bound name and the cleanup name always agree.
+WLC_ACL_NAME_MAX_CHARS = 31
+ACL_NAME_PREFIX = "VOCERA_EPC_"
 
-    return safe_name(f"VOCERA_EPC_{capture_name}", fallback="VOCERA_EPC_TMP")
+
+def acl_name(capture_name: str) -> str:
+    """Return the temporary capture ACL name, prefix-preserving within the limit.
+
+    The recognizable ``VOCERA_EPC_`` prefix is always kept so operators and the
+    cleanup sheet can identify the temporary ACL; only the capture-name portion
+    is truncated to fit the observed WLC-safe limit.
+    """
+
+    suffix_budget = WLC_ACL_NAME_MAX_CHARS - len(ACL_NAME_PREFIX)
+    capture = safe_name(capture_name, fallback="TMP")[:suffix_budget].strip("_")
+    if not capture:
+        capture = "TMP"
+    return f"{ACL_NAME_PREFIX}{capture}"
 
 
 def wlc_interface_cli(value: str) -> str:
@@ -473,7 +491,7 @@ show monitor capture {capture_name}
 monitor capture {capture_name} interface {wlc_interface_cli(session['wlc_interface'])} both
 monitor capture {capture_name} buffer circular file {session['ring_file_count']} file-size {session['ring_file_size_mb']}
 monitor capture {capture_name} access-list {session['temporary_acl_name']}
-monitor capture {capture_name} match ipv4
+monitor capture {capture_name} match ipv4 any any
 monitor capture {capture_name} inner mac {sender_mac} {receiver_mac}
 {duration_line}
 {continuous_line}
@@ -610,6 +628,25 @@ def configure_incoming_upload_dir(incoming: Path, account: pwd.struct_passwd) ->
         os.chown(incoming, account.pw_uid, account.pw_gid)
 
 
+def configure_terminal_console_dir(terminal_dir: Path, account: pwd.struct_passwd) -> None:
+    """Pre-create cli/terminal/ owned by the recorded-console operator account.
+
+    Study Web normally runs as root, but the output-recorded WLC console
+    (``run_vocera_wlc_session_console.sh``) runs as the unprivileged operator
+    account (``appsadmin`` on the collector) and writes ``script(1)`` transcripts
+    here. A root-created directory at the default mode would not be writable by
+    that account, and a 0700 directory left root-owned would lock the operator
+    out entirely. Pre-creating it at 0700 and delegating ownership keeps the
+    recorded transcripts readable only by their owner while letting the console
+    write them without a later chmod/chown race.
+    """
+
+    terminal_dir.mkdir(parents=True, exist_ok=True)
+    terminal_dir.chmod(0o700)
+    if os.geteuid() == 0:
+        os.chown(terminal_dir, account.pw_uid, account.pw_gid)
+
+
 def create_session_package(session: dict[str, Any], target: Path, *, force: bool = False) -> dict[str, Any]:
     """Create a session package and return its manifest."""
 
@@ -627,6 +664,9 @@ def create_session_package(session: dict[str, Any], target: Path, *, force: bool
     for subdir in ("incoming", "pcaps", "cli", "notes", "validation", "attempts"):
         (target / subdir).mkdir(parents=True, exist_ok=True)
     configure_incoming_upload_dir(incoming, account)
+    # The recorded-console operator account is the same unprivileged principal
+    # that receives the WLC SCP export, so reuse it to own cli/terminal/.
+    configure_terminal_console_dir(target / "cli" / "terminal", account)
     files = {
         "session.json": json.dumps(session, indent=2, sort_keys=True),
         "README.md": readme_text(session),

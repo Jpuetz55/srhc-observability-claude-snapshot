@@ -118,7 +118,7 @@ show monitor capture {session}
 ! Verify exact interface/filter syntax on the WLC with '?' before use.
 monitor capture {session} interface <WLC_UPLINK_INTERFACE> both
 monitor capture {session} buffer circular size 50
-monitor capture {session} match ipv4
+monitor capture {session} match ipv4 any any
 ! IOS XE 17.12.1+ supports inner MAC filters; verify syntax on this WLC.
 monitor capture {session} inner mac {v5000_mac} {c1000_mac}
 monitor capture {session} start
