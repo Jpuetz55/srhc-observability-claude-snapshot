@@ -113,6 +113,25 @@ QoE study is selected, the WLC command sheets, event buttons, and artifact
 controls are hidden. Create or open an investigation first, then create a WLC
 capture session inside that study.
 
+Media QoE project and study ownership uses the dedicated Media QoE API
+namespace. The ICAP QoE page and Vocera multicast page call
+`/api/media-qoe/projects` and
+`/api/media-qoe/projects/{project_id}/studies`, not the generic
+`/api/projects` routes used by RF validation. The two stores both have
+`vocera_projects` and `vocera_studies` tables, but they are separate databases;
+a generic Study Web study ID is not valid for WLC capture-session creation.
+
+After deploying these routes, the non-WLC ownership smoke is:
+
+```bash
+python3 scripts/smoke_vocera_media_qoe_workflow.py \
+  --create-disposable-wlc-session
+```
+
+That creates a disposable Media QoE project, Media QoE study, and prepared WLC
+session package through the local Study Web API. It does not SSH to the WLC,
+start EPC, export files, or enable timers.
+
 The normal operator sequence is:
 
 ```text
@@ -189,6 +208,11 @@ GET   /api/projects/{project_id}/studies
 POST  /api/projects/{project_id}/studies
 GET   /api/studies/{study_id}/runs
 POST  /api/studies/{study_id}/runs
+GET   /api/media-qoe/projects
+POST  /api/media-qoe/projects
+GET   /api/media-qoe/projects/{project_id}/studies
+POST  /api/media-qoe/projects/{project_id}/studies
+GET   /api/media-qoe/studies/{study_id}
 GET   /api/studies/{study_id}/media-qoe/dnac/captures
 POST  /api/studies/{study_id}/media-qoe/dnac/captures/download
 GET   /api/studies/{study_id}/media-qoe/wlc/sessions
