@@ -27,7 +27,6 @@ versioned Media QoE migration framework in source
 Not run in this validation pass:
 
 ```text
-production deployment
 production database migration
 production ingest timer enablement
 live 90-second WLC EPC smoke export
@@ -35,9 +34,79 @@ long reproduction capture
 manual WLC SSH console recording against a real controller
 ```
 
+## Live Runtime Gate - 2026-06-26
+
+The repository checkout is clean at:
+
+```text
+fe97b0d Refresh documentation audit findings
+```
+
+Host-level systemd inspection showed the Study Web service is active and points
+at the expected checkout:
+
+```text
+WorkingDirectory=/home/appsadmin/srhc-observability-claude-snapshot
+ExecStart=/bin/bash /home/appsadmin/srhc-observability-claude-snapshot/scripts/run_study_web.sh
+```
+
+The static Study Web bundle was rebuilt successfully from this checkout with:
+
+```bash
+./scripts/build_study_web_static.sh
+```
+
+The running process had started before the newest WLC ingest routes were
+validated:
+
+```text
+start_time=Thu 2026-06-25 17:29:59 CDT
+```
+
+Endpoint checks on 2026-06-26 showed:
+
+| Endpoint | Result |
+| --- | --- |
+| `GET /api/health` | `200 application/json` with `{"status":"ok"}` |
+| `GET /api/media-qoe/wlc/ingest/status` | `200 text/html` Study Web SPA shell |
+| `GET /metrics` | `200 text/html` Study Web SPA shell |
+
+That is a **no-go** state for production WLC ingest. The source now contains
+both the WLC ingest metrics endpoint and the top-level `/metrics` Prometheus
+alias, but the live backend process has not been restarted onto that source
+revision.
+
+Restart from this session was blocked by host policy:
+
+```text
+systemctl restart vocera-rf-validation-study-web.service
+-> Interactive authentication required.
+```
+
+An operator with systemd privileges must run:
+
+```bash
+cd /home/appsadmin/srhc-observability-claude-snapshot
+./scripts/build_study_web_static.sh
+sudo env STUDY_WEB_PYTHON_BIN=/usr/bin/python3.11 \
+  bash scripts/install_vocera_rf_validation_study_web.sh \
+    --install-python-deps \
+    --skip-frontend-build \
+    --enable \
+    --start-now
+```
+
+or otherwise restart the installed service after confirming the installed unit
+still points at this checkout.
+
+Do not apply production DB changes, enable the WLC ingest timer, or gather WLC
+data until the endpoint go condition below passes.
+
 The operational gate remains:
 
 ```text
+redeploy/restart Study Web from current source
+prove WLC ingest status and metrics routes return API content
 apply migrations
 install ingest timer with --no-enable
 run manual empty scan
@@ -111,6 +180,16 @@ Those paths returned the Study Web SPA HTML, which means the active service was
 not running the current source revision. Redeploy Study Web before using those
 new endpoints as a production health signal.
 
+Required go condition after redeploy/restart:
+
+```text
+GET /api/health                          -> application/json
+GET /api/backend-status                  -> application/json
+GET /api/media-qoe/wlc/defaults          -> application/json
+GET /api/media-qoe/wlc/ingest/status     -> application/json
+GET /metrics                             -> Prometheus text, not HTML
+```
+
 ## Documentation Status
 
 Current source-of-truth documents:
@@ -143,4 +222,3 @@ The current workflow is aligned with:
 - NIST least-privilege definition and Secure Software Development Framework:
   <https://csrc.nist.gov/glossary/term/least_privilege>
   and <https://csrc.nist.gov/pubs/sp/800/218/final>
-
