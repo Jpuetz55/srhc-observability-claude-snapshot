@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, Mapping, Sequence
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -3382,6 +3382,97 @@ def media_wlc_open_attempt(session_id: str) -> dict[str, Any] | None:
     return rows[0] if rows else None
 
 
+def media_wlc_next_operator_action(
+    session: Mapping[str, Any],
+    attempts: Sequence[Mapping[str, Any]],
+    artifacts: Sequence[Mapping[str, Any]],
+    open_attempt_id: str | None,
+) -> dict[str, str]:
+    """Return the next UI action for a human-operated WLC session."""
+
+    state = str(session.get("session_state") or "prepared_not_started")
+    if state == "prepared_not_started":
+        return {
+            "step": "prepare_wlc",
+            "label": "Record baseline and start the WLC capture",
+            "reason": "The capture session is prepared but no WLC start has been recorded.",
+        }
+    if open_attempt_id:
+        return {
+            "step": "record_outcome",
+            "label": "Record the broadcast outcome",
+            "reason": "An attempt is open and needs an observed result.",
+        }
+    if state == "running" and not attempts:
+        return {
+            "step": "start_attempt",
+            "label": "Start a broadcast attempt",
+            "reason": "The capture is marked running and no broadcast attempt exists yet.",
+        }
+    if attempts and not any(str(row.get("resolved_group_ip") or row.get("dynamic_multicast_ip") or "") for row in attempts):
+        return {
+            "step": "select_group",
+            "label": "Select the active multicast group",
+            "reason": "A broadcast attempt exists but no active 230.230.x.x group is bound to it.",
+        }
+    if state in {"running", "stopped"} and not artifacts:
+        return {
+            "step": "export_epc",
+            "label": "Stop and export the EPC",
+            "reason": "No WLC EPC artifact has been imported for this session.",
+        }
+    if artifacts and any(str(row.get("ingest_state") or "") in {"parsed", "imported"} for row in artifacts):
+        return {
+            "step": "review_evidence",
+            "label": "Review EPC evidence and findings",
+            "reason": "At least one session artifact is parsed or imported.",
+        }
+    return {
+        "step": "wait_for_ingest",
+        "label": "Wait for collector ingest",
+        "reason": "The collector has not finished finalizing and parsing the session artifact.",
+    }
+
+
+def media_wlc_session_detail(session_id: str) -> dict[str, Any]:
+    """Return a coherent read model for one selected WLC session."""
+
+    session = media_wlc_session_row(session_id)
+    attempts = media_query_rows(
+        "select * from v_vocera_media_broadcast_attempts "
+        f"where capture_session_id = {sql_text(session_id)} "
+        "order by attempt_started_at desc nulls last, created_at desc "
+        "limit 1000;"
+    )
+    open_attempt = media_wlc_open_attempt(session_id)
+    artifacts = media_query_rows(
+        "select * from vocera_media_session_artifacts "
+        f"where capture_session_id = {sql_text(session_id)} "
+        "order by received_at desc nulls last, created_at desc, artifact_id;"
+    )
+    events = media_query_rows(
+        "select * from v_vocera_media_capture_session_events "
+        f"where capture_session_id = {sql_text(session_id)} "
+        "order by event_time desc nulls last, created_at desc "
+        "limit 1000;"
+    )
+    package_path = str(session.get("command_package_path") or "")
+    command_dir = Path(package_path) if package_path else media_wlc_session_package_dir(str(session.get("study_id") or ""), session_id, create=False)
+    open_attempt_id = str(open_attempt.get("attempt_id")) if open_attempt else None
+    selected_attempt_id = open_attempt_id or (str(attempts[0].get("attempt_id")) if attempts else "")
+    return {
+        "session": session,
+        "attempts": attempts,
+        "events": events,
+        "artifacts": artifacts,
+        "command_sheets": media_wlc_command_sheets(command_dir),
+        "ingest_status": media_wlc_ingest_health(),
+        "open_attempt_id": open_attempt_id,
+        "selected_attempt_id": selected_attempt_id,
+        "next_operator_action": media_wlc_next_operator_action(session, attempts, artifacts, open_attempt_id),
+    }
+
+
 def media_wlc_event_context(payload: BaseModel) -> dict[str, Any]:
     """Return a JSON-safe event payload for raw_context."""
 
@@ -4696,6 +4787,12 @@ def update_media_qoe_wlc_session(session_id: str, payload: MediaWlcCaptureSessio
     media_wlc_validate_id(session_id, "session_id")
     row = media_wlc_update_session(session_id, payload)
     return {"ok": True, "session": row}
+
+
+@app.get("/api/media-qoe/wlc/sessions/{session_id}")
+def get_media_qoe_wlc_session(session_id: str) -> dict[str, Any]:
+    media_wlc_validate_id(session_id, "session_id")
+    return {"ok": True, **media_wlc_session_detail(session_id)}
 
 
 @app.post("/api/media-qoe/wlc/sessions/{session_id}/events")
