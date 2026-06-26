@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { createProject, createProjectStudy, getMediaQoeSummary, listProjectStudies, listProjects } from '../api/client'
+import {
+  createMediaQoeProject,
+  createMediaQoeProjectStudy,
+  getMediaQoeSummary,
+  listMediaQoeProjectStudies,
+  listMediaQoeProjects
+} from '../api/client'
 import type { Project, StringRow, Study } from '../api/types'
 import { Card } from '../components/Card'
 import { MediaWlcCaptureSessions } from '../components/MediaWlcCaptureSessions'
@@ -80,7 +86,7 @@ export function VoceraMulticastStudy() {
       try {
         setLoadingInitial(true)
         setError(null)
-        const [summaryResponse, projectResponse] = await Promise.all([getMediaQoeSummary(), listProjects()])
+        const [summaryResponse, projectResponse] = await Promise.all([getMediaQoeSummary(), listMediaQoeProjects()])
         const loadedProjects = projectResponse.projects ?? []
         setProjects(loadedProjects)
         const visibleProjects = visibleMediaProjects(loadedProjects)
@@ -120,7 +126,7 @@ export function VoceraMulticastStudy() {
       try {
         setLoadingStudies(true)
         setError(null)
-        const response = await listProjectStudies(selectedProjectId)
+        const response = await listMediaQoeProjectStudies(selectedProjectId)
         const mediaStudies = (response.studies ?? []).filter((study) => field(study, 'study_type') === 'media_qoe')
         setStudies(mediaStudies)
         setSelectedStudyId((current) => {
@@ -182,7 +188,7 @@ export function VoceraMulticastStudy() {
     setError(null)
     try {
       const projectResponse = investigationForm.projectMode === 'new'
-        ? await createProject({
+        ? await createMediaQoeProject({
             project_name: projectName,
             project_type: 'media_qoe',
             site: 'srhc',
@@ -195,7 +201,7 @@ export function VoceraMulticastStudy() {
         `Purpose: ${purpose}.`,
         investigationForm.notes.trim()
       ].filter(Boolean).join('\n\n')
-      const studyResponse = await createProjectStudy(projectId, {
+      const studyResponse = await createMediaQoeProjectStudy(projectId, {
         study_name: studyName,
         study_type: 'media_qoe',
         study_scope: 'media_qoe',
@@ -203,8 +209,8 @@ export function VoceraMulticastStudy() {
         description
       })
       const [projectReload, studyReload] = await Promise.all([
-        listProjects(),
-        listProjectStudies(projectId)
+        listMediaQoeProjects(),
+        listMediaQoeProjectStudies(projectId)
       ])
       setProjects(projectReload.projects ?? [])
       setStudies((studyReload.studies ?? []).filter((study) => field(study, 'study_type') === 'media_qoe'))
