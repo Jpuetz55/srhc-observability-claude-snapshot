@@ -218,6 +218,42 @@ STUDY_WEB_MEDIA_QOE_WLC_SESSION_ROOT exists
 free bytes under the session root >= STUDY_WEB_WLC_INGEST_MIN_FREE_BYTES
 ```
 
+## Runtime Deployment Gate
+
+Before production schema changes, WLC capture, or timer enablement, prove the
+installed Study Web process is running the current source line, not only the
+current static frontend bundle.
+
+Required checks:
+
+```bash
+cd /home/appsadmin/srhc-observability-claude-snapshot
+git status --short --branch
+git log -1 --oneline
+systemctl show vocera-rf-validation-study-web.service \
+  -p WorkingDirectory -p ExecStart -p Environment -p ActiveState -p SubState
+
+curl -i http://127.0.0.1:8097/api/health
+curl -i http://127.0.0.1:8097/api/backend-status
+curl -i http://127.0.0.1:8097/api/media-qoe/wlc/defaults
+curl -i http://127.0.0.1:8097/api/media-qoe/wlc/ingest/status
+curl -i http://127.0.0.1:8097/metrics
+```
+
+Go condition:
+
+```text
+/api/health                         application/json
+/api/backend-status                 application/json
+/api/media-qoe/wlc/defaults         application/json
+/api/media-qoe/wlc/ingest/status    application/json
+/metrics                            Prometheus text exposition
+```
+
+Stop if any WLC ingest API or metrics route returns the Study Web SPA HTML
+shell. That means the deployed backend process does not match the source line
+that was validated, even if the service unit points at the expected checkout.
+
 Default runtime values:
 
 ```text
