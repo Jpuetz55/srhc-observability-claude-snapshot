@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from typing import Any
 
 
@@ -31,6 +33,32 @@ def api_json(api_base: str, path: str) -> dict[str, Any]:
         data = json.loads(payload)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"{url} did not return JSON: {payload[:200]!r}") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError(f"{url} returned non-object JSON: {data!r}")
+    return data
+
+
+def api_post_json(api_base: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    url = urllib.parse.urljoin(api_base.rstrip("/") + "/", path.lstrip("/"))
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            text = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"{url} returned HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"{url} failed: {exc.reason}") from exc
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{url} did not return JSON: {text[:200]!r}") from exc
     if not isinstance(data, dict):
         raise RuntimeError(f"{url} returned non-object JSON: {data!r}")
     return data
@@ -73,12 +101,34 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--api-base", default="http://127.0.0.1:8097")
     parser.add_argument("--project-id", default=DEFAULT_PROJECT_ID)
     parser.add_argument("--study-id", default=DEFAULT_STUDY_ID)
+    parser.add_argument(
+        "--create-disposable-wlc-session",
+        action="store_true",
+        help="Create a disposable Media QoE project, study, and prepared WLC session. This does not contact the WLC.",
+    )
     args = parser.parse_args(argv)
 
     media_summary = api_json(args.api_base, "/api/media-qoe/summary")
     require(media_summary.get("ok") is True, "media summary endpoint returns ok")
     require(media_summary.get("project", {}).get("project_id") == args.project_id, "default media project is exposed")
     require(media_summary.get("summary", {}).get("project_id") == args.project_id, "default media project summary is exposed")
+
+    media_projects = api_json(args.api_base, "/api/media-qoe/projects")
+    require(media_projects.get("ok") is True and isinstance(media_projects.get("projects"), list), "Media QoE-owned project list returns rows")
+    require(
+        any(item.get("project_id") == args.project_id for item in media_projects.get("projects", [])),
+        "default Media QoE project is present in Media QoE ownership list",
+    )
+
+    media_studies = api_json(args.api_base, f"/api/media-qoe/projects/{urllib.parse.quote(args.project_id)}/studies")
+    require(media_studies.get("ok") is True and isinstance(media_studies.get("studies"), list), "Media QoE-owned study list returns rows")
+    require(
+        any(item.get("study_id") == args.study_id for item in media_studies.get("studies", [])),
+        "default Media QoE study is present in Media QoE ownership list",
+    )
+
+    media_study = api_json(args.api_base, f"/api/media-qoe/studies/{urllib.parse.quote(args.study_id)}")
+    require(media_study.get("ok") is True and media_study.get("study", {}).get("study_id") == args.study_id, "Media QoE study lookup returns the requested study")
 
     execution_status = api_json(args.api_base, "/api/media-qoe/execution/status")
     require(execution_status.get("ok") is True, "media execution status endpoint returns ok")
@@ -136,6 +186,48 @@ def main(argv: list[str] | None = None) -> int:
 
     grafana = api_json(args.api_base, "/api/grafana/status")
     require("grafana" in grafana, "Grafana status endpoint still responds")
+
+    if args.create_disposable_wlc_session:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        suffix = uuid.uuid4().hex[:8]
+        project_id = f"project_media_qoe_smoke_{stamp}_{suffix}"
+        study_id = f"study_media_qoe_smoke_{stamp}_{suffix}"
+        project = api_post_json(
+            args.api_base,
+            "/api/media-qoe/projects",
+            {
+                "project_id": project_id,
+                "project_name": f"Disposable Media QoE smoke {stamp}",
+                "project_type": "media_qoe",
+                "site": "smoke",
+                "description": "Disposable ownership smoke project created by smoke_vocera_media_qoe_workflow.py.",
+            },
+        )
+        require(project.get("ok") is True and project.get("project", {}).get("project_id") == project_id, "disposable Media QoE project can be created")
+        study = api_post_json(
+            args.api_base,
+            f"/api/media-qoe/projects/{urllib.parse.quote(project_id)}/studies",
+            {
+                "study_id": study_id,
+                "study_name": f"Disposable WLC session smoke {stamp}",
+                "study_type": "media_qoe",
+                "study_scope": "media_qoe",
+                "study_status": "active",
+                "description": "Disposable Media QoE ownership and WLC-session smoke study.",
+            },
+        )
+        require(study.get("ok") is True and study.get("study", {}).get("study_id") == study_id, "disposable Media QoE study can be created")
+        lookup = api_json(args.api_base, f"/api/media-qoe/studies/{urllib.parse.quote(study_id)}")
+        require(lookup.get("ok") is True and lookup.get("study", {}).get("study_id") == study_id, "disposable Media QoE study lookup succeeds")
+        session = api_post_json(
+            args.api_base,
+            f"/api/studies/{urllib.parse.quote(study_id)}/media-qoe/wlc/sessions",
+            {
+                "capture_mode": "short_validation",
+                "notes": "Disposable prepared-session smoke. No WLC capture was started.",
+            },
+        )
+        require(session.get("ok") is True and session.get("session", {}).get("study_id") == study_id, "WLC session creation succeeds under Media QoE-owned study")
 
     print("OK: media QoE Study Web smoke checks passed")
     return 0
