@@ -188,6 +188,25 @@ function profileRows(defaults: MediaWlcDefaultsResponse | null, form?: CreateFor
   ]
 }
 
+function hasCompleteCaptureProfile(defaults: MediaWlcDefaultsResponse | null): boolean {
+  const profile = defaults?.defaults
+  if (!profile) {
+    return false
+  }
+  return Boolean(
+    profile.wlc_name?.trim() &&
+    profile.wlc_interface?.trim() &&
+    profile.collector_host?.trim() &&
+    profile.collector_scp_username?.trim() &&
+    Number(profile.collector_scp_port) > 0 &&
+    Number(profile.vocera_vlan) > 0 &&
+    profile.vocera_multicast_pool?.trim() &&
+    Number.isFinite(Number(profile.expected_dscp)) &&
+    Number(profile.ring_file_count) > 0 &&
+    Number(profile.ring_file_size_mb) > 0
+  )
+}
+
 function commandSheet(commandSheets: Record<string, string>, name: string, attempt: StringRow | null): string {
   return commandWithGroup(commandSheets[name] ?? '', attempt)
 }
@@ -704,6 +723,7 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
   const [consoleUser, setConsoleUser] = useState('')
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [validMediaStudy, setValidMediaStudy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
 
@@ -711,6 +731,8 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
     () => sessions.find((session) => field(session, 'session_id') === selectedSessionId) ?? null,
     [selectedSessionId, sessions]
   )
+  const completeCaptureProfile = hasCompleteCaptureProfile(defaults)
+  const canCreateSession = Boolean(studyId) && validMediaStudy && completeCaptureProfile && !loading && !busy
 
   const updateUrlSession = (sessionId: string | null) => {
     const url = new URL(window.location.href)
@@ -736,16 +758,21 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
       setSessions([])
       setSelectedSessionId(null)
       setDetail(null)
+      setValidMediaStudy(false)
       return
     }
     setLoading(true)
     setError(null)
     try {
-      const [defaultsResponse, sessionsResponse] = await Promise.all([
-        getMediaQoeWlcDefaults(),
-        listStudyMediaQoeWlcSessions(studyId)
-      ])
-      setDefaults(defaultsResponse)
+      try {
+        const defaultsResponse = await getMediaQoeWlcDefaults()
+        setDefaults(defaultsResponse)
+      } catch (err) {
+        setDefaults(null)
+        setError(err instanceof Error ? err.message : 'Failed to load WLC capture profile defaults')
+      }
+      const sessionsResponse = await listStudyMediaQoeWlcSessions(studyId)
+      setValidMediaStudy(true)
       const rows = sessionsResponse.sessions ?? []
       setSessions(rows)
       const validPreferred = preferredSessionId && rows.some((session) => field(session, 'session_id') === preferredSessionId)
@@ -754,7 +781,12 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
       updateUrlSession(nextSelected)
       await loadDetail(nextSelected)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load WLC capture sessions')
+      setValidMediaStudy(false)
+      setSessions([])
+      setSelectedSessionId(null)
+      setDetail(null)
+      updateUrlSession(null)
+      setError(err instanceof Error ? err.message : 'Selected study is not a Media QoE investigation.')
     } finally {
       setLoading(false)
     }
@@ -929,7 +961,7 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button className="rounded-md bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50" disabled={!studyId || busy} onClick={() => setShowCreate(true)}>
+            <button className="rounded-md bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50" disabled={!canCreateSession} onClick={() => setShowCreate(true)}>
               New WLC capture session
             </button>
             <button className="rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 disabled:opacity-50" disabled={loading} onClick={() => { void refresh() }}>
@@ -941,6 +973,18 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
 
       {error && <div className="rounded-md border border-rose-900 bg-rose-950/30 p-3 text-sm text-rose-100">{error}</div>}
       {message && <div className="rounded-md border border-emerald-900 bg-emerald-950/30 p-3 text-sm text-emerald-100">{message}</div>}
+      {studyId && !validMediaStudy && !loading && (
+        <div className="rounded-md border border-amber-900 bg-amber-950/30 p-3 text-sm text-amber-100">
+          <p className="font-semibold">Selected study is not a Media QoE investigation.</p>
+          <p className="mt-1 text-amber-100/80">WLC capture sessions can only be created under a study owned by the Media QoE database.</p>
+        </div>
+      )}
+      {!loading && !completeCaptureProfile && (
+        <div className="rounded-md border border-amber-900 bg-amber-950/30 p-3 text-sm text-amber-100">
+          <p className="font-semibold">Capture profile unavailable.</p>
+          <p className="mt-1 text-amber-100/80">Cannot create a WLC capture session until profile defaults load successfully.</p>
+        </div>
+      )}
 
       {showCreate && (
         <SessionCreateWizard defaults={defaults} busy={busy} onCreate={createSession} onCancel={() => setShowCreate(false)} />
