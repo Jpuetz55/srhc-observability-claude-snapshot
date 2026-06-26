@@ -100,13 +100,51 @@ systemctl show vocera-rf-validation-study-web.service \
   -p WorkingDirectory -p ExecStart -p Environment
 ```
 
-## WLC capture-session workflow
+## WLC multicast investigation workflow
 
-Use **Vocera multicast → Capture Sessions** in the UI to create a long
-reproduction or short validation package. The package contains `session.json`,
-event/attempt records, and generated command sheets. The operator runs those
-commands from an approved WLC terminal and handles the WLC's interactive SCP
-password prompt.
+Use **Vocera multicast** for manual WLC EPC multicast investigations. This page
+is separate from ICAP QoE because it handles a different evidence model: one
+manual WLC capture session can contain many human-observed broadcast attempts,
+active multicast-group selections, WLC transcript evidence, and one exported
+EPC artifact.
+
+The UI intentionally starts with an investigation selection step. If no Media
+QoE study is selected, the WLC command sheets, event buttons, and artifact
+controls are hidden. Create or open an investigation first, then create a WLC
+capture session inside that study.
+
+The normal operator sequence is:
+
+```text
+Create or open investigation
+-> create prepared WLC capture session
+-> copy baseline/start command sheets into a human-operated WLC terminal
+-> record broadcast attempt outcomes
+-> paste active-group summary and explicitly select the 230.230.x.x group row
+-> copy stop/export command sheet and enter the SCP password on the WLC
+-> wait for collector ingest and parser status
+-> copy cleanup command sheet only after export succeeds
+-> review artifacts, transcript evidence, and findings
+```
+
+The capture profile defaults are shown as read-only operator context. Normal
+sessions use the SRHC Vocera multicast profile (`SRHC-WLC-40G-SEC`,
+`Port-channel1`, collector `10.0.128.107`, VLAN `684`, pool
+`230.230.0.0/20`, DSCP `46`). Overrides are hidden under an advanced section
+and require a reason so the package preserves why a normal site value changed.
+
+Each WLC action button records an operator timeline event only. Labels such as
+`I started the WLC capture` and `I confirmed SCP export succeeded` do not start,
+stop, export, or clean up anything on the controller.
+
+Every event, active-group selection, and artifact action is scoped to the
+selected session. The UI no longer targets "the first running session" or a
+fallback first row. The selected session ID is held in the page URL and fetched
+through the selected-session API read model.
+
+The package contains `session.json`, event/attempt records, and generated
+command sheets. The operator runs those commands from an approved WLC terminal
+and handles the WLC's interactive SCP password prompt.
 
 A long session uses this state flow:
 
@@ -155,6 +193,7 @@ GET   /api/studies/{study_id}/media-qoe/dnac/captures
 POST  /api/studies/{study_id}/media-qoe/dnac/captures/download
 GET   /api/studies/{study_id}/media-qoe/wlc/sessions
 POST  /api/studies/{study_id}/media-qoe/wlc/sessions
+GET   /api/media-qoe/wlc/sessions/{session_id}
 POST  /api/media-qoe/wlc/sessions/{session_id}/events
 POST  /api/media-qoe/wlc/sessions/{session_id}/attempts/start
 PATCH /api/media-qoe/wlc/attempts/{attempt_id}/outcome
