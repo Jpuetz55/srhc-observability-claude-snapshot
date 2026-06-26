@@ -31,6 +31,9 @@ preserved implementation and history notes.
 - [`wireless/vocera-wlc-phase0-production-contract.md`](wireless/vocera-wlc-phase0-production-contract.md)
   — current production contract for WLC SCP staging, root-owned EPC
   finalization, artifact states, retries, quarantine, and timer enablement.
+- [`wireless/vocera-wlc-application-validation-status.md`](wireless/vocera-wlc-application-validation-status.md)
+  — current tested stopping point, commands run, live endpoint observations, and
+  remaining operational gates before timer enablement.
 - [`wireless/vocera-wlc-phase0-ingest-rehearsal-runbook.md`](wireless/vocera-wlc-phase0-ingest-rehearsal-runbook.md)
   — rehearsal gate for the automatic SCP upload ingest timer.
 - [`wireless/vocera-wlc-capture-transfer.md`](wireless/vocera-wlc-capture-transfer.md)
