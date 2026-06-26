@@ -60,29 +60,38 @@ A short stability window (5s here) keeps the rehearsal quick; production uses th
 default. The ingest-scan endpoint is **localhost-only**, so run these curls on the
 same host.
 
-## 1–4. Schema and idempotency
+## 1-4. Schema and migration idempotency
 
 1. Restore the production dump into the rehearsal DB (out of scope here; use your
    standard restore).
-2. Apply the Phase 0 schema:
+2. Apply the reviewed versioned migrations to the restored rehearsal DB:
 
 ```bash
-$PSQL -v ON_ERROR_STOP=1 -f sql/vocera_media_qoe_schema.sql
+make vocera-media-qoe-apply-migrations \
+  VOCERA_MEDIA_QOE_DATABASE_URL="$REHEARSAL_DB_URL" \
+  VOCERA_MEDIA_QOE_PSQL_BIN=psql
 ```
 
-3. Apply it **again** to prove idempotency — it must succeed with no errors and
-   create no duplicates (`create table if not exists`, `create index if not
-   exists`, and guarded `do $$ ... $$` blocks):
+3. Apply the migration runner **again** to prove idempotency. Applied migration
+   checksums must match, and the second run must report only `already_applied`
+   rows:
 
 ```bash
-$PSQL -v ON_ERROR_STOP=1 -f sql/vocera_media_qoe_schema.sql && echo "IDEMPOTENT OK"
+make vocera-media-qoe-apply-migrations \
+  VOCERA_MEDIA_QOE_DATABASE_URL="$REHEARSAL_DB_URL" \
+  VOCERA_MEDIA_QOE_PSQL_BIN=psql
 ```
 
-4. Confirm the new table and its idempotency guard exist:
+The monolithic `sql/vocera_media_qoe_schema.sql` remains useful for bootstrap
+and local development checks, but the rehearsal for production enablement must
+exercise the same migration ledger and checksum path that production uses.
+
+4. Confirm the table, unique guard, and migration ledger exist:
 
 ```bash
 $PSQL -c "\d vocera_media_session_artifacts"
 $PSQL -c "select indexname from pg_indexes where indexname = 'uq_vocera_media_session_artifacts_session_sha';"
+$PSQL -c "select migration_id, checksum, applied_at, source_commit from schema_migrations order by migration_id;"
 ```
 
 ## 5. Test capture session + on-disk package
@@ -323,7 +332,8 @@ retries must not create multiple files/artifacts/captures
 The rehearsal passes when, with no manual file movement, hashing, or parser
 launch:
 
-- the schema applies twice cleanly (idempotent),
+- versioned migrations apply cleanly and rerun as already-applied with matching
+  checksums,
 - a growing/incomplete upload is never finalized,
 - a stable valid EPC is finalized as service-owned `pcaps/` evidence,
 - exactly one artifact, one `wlc_epc` capture, and one successful parse exist,
