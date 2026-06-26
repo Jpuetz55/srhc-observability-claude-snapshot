@@ -26,6 +26,32 @@ export function getMediaQoeSummary(): Promise<MediaQoeSummaryResponse> {
   return request<MediaQoeSummaryResponse>('/api/media-qoe/summary')
 }
 
+export function listMediaQoeProjects(): Promise<ProjectsResponse> {
+  return request<ProjectsResponse>('/api/media-qoe/projects')
+}
+
+export function createMediaQoeProject(payload: ProjectPayload): Promise<ProjectResponse> {
+  return request<ProjectResponse>('/api/media-qoe/projects', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function listMediaQoeProjectStudies(projectId: string): Promise<StudiesResponse> {
+  return request<StudiesResponse>(`/api/media-qoe/projects/${encodeURIComponent(projectId)}/studies`)
+}
+
+export function createMediaQoeProjectStudy(projectId: string, payload: StudyPayload): Promise<StudyResponse> {
+  return request<StudyResponse>(`/api/media-qoe/projects/${encodeURIComponent(projectId)}/studies`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function getMediaQoeStudy(studyId: string): Promise<StudyResponse> {
+  return request<StudyResponse>(`/api/media-qoe/studies/${encodeURIComponent(studyId)}`)
+}
+
 export function getMediaQoeExecutionStatus(): Promise<MediaExecutionStatusResponse> {
   return request<MediaExecutionStatusResponse>('/api/media-qoe/execution/status')
 }
