@@ -81,7 +81,7 @@ RING_FILE_COUNT ?= 5
 RING_FILE_SIZE_MB ?= 100
 WLC_CAPTURE_MODE ?= long_reproduction
 WLC_SHORT_VALIDATION_DURATION_SECONDS ?= 90
-WLC_SSH_HOST ?= $(WLC_NAME)
+WLC_SSH_HOST ?=
 WLC_SSH_USER ?=
 WLC_SSH_PORT ?= 22
 VOCERA_MULTICAST_POOL ?= 230.230.0.0/20
@@ -515,7 +515,7 @@ vocera-media-qoe-wlc-session-smoke-init:
 
 vocera-media-qoe-wlc-session-console:
 	@test -n "$(SESSION_DIR)" || (echo "Set SESSION_DIR" && exit 1)
-	@test -n "$(WLC_SSH_HOST)" || (echo "Set WLC_SSH_HOST or WLC_NAME" && exit 1)
+	@test -n "$(WLC_SSH_HOST)" || (echo "Set WLC_SSH_HOST" && exit 1)
 	@test -n "$(WLC_SSH_USER)" || (echo "Set WLC_SSH_USER" && exit 1)
 	bash ./scripts/run_vocera_wlc_session_console.sh \
 		--session-dir "$(SESSION_DIR)" \
