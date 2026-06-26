@@ -1,4 +1,4 @@
-import type { ApiResult, GrafanaStatusResponse, ManualSamplePayload, MediaCaptureExecuteRequest, MediaCaptureExecuteResponse, MediaCaptureRegisterRequest, MediaCaptureRegisterResponse, MediaDnacCaptureDownloadRequest, MediaDnacCaptureDownloadResponse, MediaDnacCaptureQuery, MediaDnacCapturesResponse, MediaDnacStatusResponse, MediaExecutionStatusResponse, MediaParseRunsResponse, MediaQoeCapturesResponse, MediaQoeDuplicatesResponse, MediaQoeProjectSummaryResponse, MediaQoeStreamReviewPayload, MediaQoeStreamReviewResponse, MediaQoeStreamsResponse, MediaQoeSummaryResponse, MediaRawFilesResponse, MediaWlcAttemptActiveGroupRequest, MediaWlcAttemptOutcomeRequest, MediaWlcAttemptResponse, MediaWlcAttemptsResponse, MediaWlcAttemptStartRequest, MediaWlcDefaultsResponse, MediaWlcSessionCreateRequest, MediaWlcSessionDetailResponse, MediaWlcSessionEventRequest, MediaWlcSessionArtifactsResponse, MediaWlcSessionEventResponse, MediaWlcSessionPatchRequest, MediaWlcSessionResponse, MediaWlcSessionsResponse, ProjectPayload, ProjectResponse, ProjectRfDuplicatesResponse, ProjectRfResultsResponse, ProjectsResponse, RfInputFileResponse, RfInputFilesResponse, RfManualEntriesResponse, RfRunBundleResponse, RfRunResponse, RfRunsResponse, RfSummary, RfTimeAlignmentResponse, RunComparisonResponse, RunPayload, SourceType, StudiesResponse, StudyPayload, StudyResponse, StudySamplesResponse } from './types'
+import type { ApiResult, GrafanaStatusResponse, ManualSamplePayload, MediaApOtaPreflightCreateRequest, MediaApOtaPreflightRun, MediaCaptureExecuteRequest, MediaCaptureExecuteResponse, MediaCaptureRegisterRequest, MediaCaptureRegisterResponse, MediaDnacCaptureDownloadRequest, MediaDnacCaptureDownloadResponse, MediaDnacCaptureQuery, MediaDnacCapturesResponse, MediaDnacStatusResponse, MediaExecutionStatusResponse, MediaParseRunsResponse, MediaQoeCapturesResponse, MediaQoeDuplicatesResponse, MediaQoeProjectSummaryResponse, MediaQoeStreamReviewPayload, MediaQoeStreamReviewResponse, MediaQoeStreamsResponse, MediaQoeSummaryResponse, MediaRawFilesResponse, MediaWlcAttemptActiveGroupRequest, MediaWlcAttemptOutcomeRequest, MediaWlcAttemptResponse, MediaWlcAttemptsResponse, MediaWlcAttemptStartRequest, MediaWlcDefaultsResponse, MediaWlcSessionCreateRequest, MediaWlcSessionDetailResponse, MediaWlcSessionEventRequest, MediaWlcSessionArtifactsResponse, MediaWlcSessionEventResponse, MediaWlcSessionPatchRequest, MediaWlcSessionResponse, MediaWlcSessionsResponse, ProjectPayload, ProjectResponse, ProjectRfDuplicatesResponse, ProjectRfResultsResponse, ProjectsResponse, RfInputFileResponse, RfInputFilesResponse, RfManualEntriesResponse, RfRunBundleResponse, RfRunResponse, RfRunsResponse, RfSummary, RfTimeAlignmentResponse, RunComparisonResponse, RunPayload, SourceType, StringRow, StudiesResponse, StudyPayload, StudyResponse, StudySamplesResponse } from './types'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -309,6 +309,44 @@ export function updateMediaQoeWlcSession(sessionId: string, payload: MediaWlcSes
 
 export function createMediaQoeWlcSessionEvent(sessionId: string, payload: MediaWlcSessionEventRequest): Promise<MediaWlcSessionEventResponse> {
   return request<MediaWlcSessionEventResponse>(`/api/media-qoe/wlc/sessions/${encodeURIComponent(sessionId)}/events`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function getMediaQoeApOtaDiscoveryCommands(
+  sessionId: string,
+  params: { servingApName?: string; siteTag?: string; packetCaptureProfile?: string } = {}
+): Promise<{ ok: boolean; command_sheets: Record<string, string>; target_client_mac: string }> {
+  const query = new URLSearchParams()
+  if (params.servingApName) query.set('serving_ap_name', params.servingApName)
+  if (params.siteTag) query.set('site_tag', params.siteTag)
+  if (params.packetCaptureProfile) query.set('packet_capture_profile', params.packetCaptureProfile)
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  return request(`/api/media-qoe/wlc/sessions/${encodeURIComponent(sessionId)}/ap-ota/discovery-commands${suffix}`)
+}
+
+export function listMediaQoeApOtaPreflights(
+  sessionId: string
+): Promise<{ ok: boolean; preflights: MediaApOtaPreflightRun[] }> {
+  return request(`/api/media-qoe/wlc/sessions/${encodeURIComponent(sessionId)}/ap-ota/preflights`)
+}
+
+export function createMediaQoeApOtaPreflight(
+  sessionId: string,
+  payload: MediaApOtaPreflightCreateRequest
+): Promise<{ ok: boolean; preflight: MediaApOtaPreflightRun }> {
+  return request(`/api/media-qoe/wlc/sessions/${encodeURIComponent(sessionId)}/ap-ota/preflights`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function createMediaQoeApOtaCompanionLeg(
+  preflightId: string,
+  payload: { notes?: string } = {}
+): Promise<{ ok: boolean; leg: StringRow; preflight: MediaApOtaPreflightRun; command_sheets: Record<string, string> }> {
+  return request(`/api/media-qoe/ap-ota/preflights/${encodeURIComponent(preflightId)}/companion-leg`, {
     method: 'POST',
     body: JSON.stringify(payload)
   })

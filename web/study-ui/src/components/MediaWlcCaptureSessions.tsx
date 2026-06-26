@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  createMediaQoeApOtaCompanionLeg,
+  createMediaQoeApOtaPreflight,
   createMediaQoeWlcSessionEvent,
   createStudyMediaQoeWlcSession,
+  getMediaQoeApOtaDiscoveryCommands,
   getMediaQoeWlcDefaults,
   getMediaQoeWlcSession,
   listStudyMediaQoeWlcSessions,
@@ -11,6 +14,8 @@ import {
   updateMediaQoeWlcSession
 } from '../api/client'
 import type {
+  MediaApOtaPreflightCreateRequest,
+  MediaApOtaPreflightRun,
   MediaWlcDefaultsResponse,
   MediaWlcSessionCreateRequest,
   MediaWlcSessionDetailResponse,
@@ -558,6 +563,301 @@ function GroupSelectionPanel({
   )
 }
 
+const AP_OTA_CLASSIFIERS = ['control', 'management', 'data', 'ip', 'udp', 'broadcast', 'multicast'] as const
+
+function apOtaTruthy(value: unknown): boolean {
+  if (typeof value === 'boolean') return value
+  const text = String(value ?? '').toLowerCase()
+  return text === 't' || text === 'true' || text === '1' || text === 'yes'
+}
+
+function apOtaClassifiers(value: MediaApOtaPreflightRun['classifiers']): Record<string, boolean> {
+  if (!value) return {}
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value) as Record<string, boolean>
+    } catch {
+      return {}
+    }
+  }
+  return value
+}
+
+function apOtaBlockers(value: MediaApOtaPreflightRun['blockers']): string[] {
+  if (!value) return []
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      return Array.isArray(parsed) ? (parsed as string[]) : []
+    } catch {
+      return []
+    }
+  }
+  return value
+}
+
+type ApOtaGateTone = 'unknown' | 'pass' | 'fail'
+
+function apOtaGatePill(state: ApOtaGateTone, labels: { pass: string; fail: string; unknown: string }) {
+  if (state === 'pass') return statusPill(labels.pass, 'emerald')
+  if (state === 'fail') return statusPill(labels.fail, 'rose')
+  return statusPill(labels.unknown, 'slate')
+}
+
+const EMPTY_AP_OTA_FORM = {
+  raw_cli_output: '',
+  target_client_associated: false,
+  serving_ap_name: '',
+  serving_ap_mac: '',
+  serving_ap_mode: 'local',
+  target_radio: '',
+  target_band: '',
+  target_channel: '',
+  target_channel_width: '',
+  site_tag: '',
+  ap_join_profile: '',
+  packet_capture_profile: '',
+  site_capture_status_verified: false,
+  existing_site_capture_active: false,
+  ftp_server_host: '',
+  ftp_path: '',
+  ftp_username: '',
+  classifiers: Object.fromEntries(AP_OTA_CLASSIFIERS.map((name) => [name, false])) as Record<string, boolean>,
+  notes: ''
+}
+
+type ApOtaForm = typeof EMPTY_AP_OTA_FORM
+
+function ApOtaPanel({
+  detail,
+  busy,
+  onRefresh,
+  onMessage
+}: {
+  detail: MediaWlcSessionDetailResponse
+  busy: boolean
+  onRefresh: () => void
+  onMessage: (message: string) => void
+}) {
+  const sessionId = field(detail.session, 'session_id')
+  const apDefaults = detail.ap_ota_defaults ?? {}
+  const runs = detail.ap_ota_preflight_runs ?? []
+  const latest = runs[0] ?? null
+  const [form, setForm] = useState<ApOtaForm>(EMPTY_AP_OTA_FORM)
+  const [showForm, setShowForm] = useState(false)
+  const [working, setWorking] = useState(false)
+  const [discoverySheets, setDiscoverySheets] = useState<Record<string, string>>({})
+
+  const targetMac = detailField(apDefaults, 'target_client_mac', '00:09:ef:61:0b:f7')
+  const targetName = detailField(apDefaults, 'target_client_name', 'C1000 Receiver')
+
+  const classifiers = latest ? apOtaClassifiers(latest.classifiers) : {}
+  const missingClassifiers = AP_OTA_CLASSIFIERS.filter((name) => !classifiers[name])
+  const blockers = latest ? apOtaBlockers(latest.blockers) : []
+  const effectiveState = latest?.effective_state ?? 'blocked'
+  const canCreateLeg = Boolean(latest?.can_create_companion_leg) && !busy && !working
+
+  const associationState: ApOtaGateTone = !latest ? 'unknown' : apOtaTruthy(latest.target_client_associated) ? 'pass' : 'fail'
+  const servingApState: ApOtaGateTone = !latest ? 'unknown' : latest.serving_ap_name ? 'pass' : 'fail'
+  const siteLockState: ApOtaGateTone = !latest
+    ? 'unknown'
+    : apOtaTruthy(latest.site_capture_status_verified) && !apOtaTruthy(latest.existing_site_capture_active)
+      ? 'pass'
+      : 'fail'
+  const profileState: ApOtaGateTone = !latest
+    ? 'unknown'
+    : latest.packet_capture_profile && latest.site_tag && latest.ap_join_profile
+      ? 'pass'
+      : 'fail'
+  const classifierState: ApOtaGateTone = !latest ? 'unknown' : missingClassifiers.length === 0 ? 'pass' : 'fail'
+  const ftpState: ApOtaGateTone = !latest
+    ? 'unknown'
+    : latest.ftp_server_host && latest.ftp_path && latest.ftp_username
+      ? 'pass'
+      : 'fail'
+  const freshnessState: ApOtaGateTone = !latest ? 'unknown' : latest.fresh ? 'pass' : 'fail'
+
+  const runAction = async (label: string, action: () => Promise<void>) => {
+    setWorking(true)
+    try {
+      await action()
+    } catch (err) {
+      onMessage(`${label} failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const onDownloadDiscovery = () =>
+    runAction('Download discovery commands', async () => {
+      const result = await getMediaQoeApOtaDiscoveryCommands(sessionId, {
+        servingApName: form.serving_ap_name || latest?.serving_ap_name || undefined,
+        siteTag: form.site_tag || latest?.site_tag || undefined,
+        packetCaptureProfile: form.packet_capture_profile || latest?.packet_capture_profile || undefined
+      })
+      setDiscoverySheets(result.command_sheets ?? {})
+      onMessage('Read-only AP-OTA discovery command sheets generated.')
+    })
+
+  const onRecordPreflight = () =>
+    runAction('Record preflight evidence', async () => {
+      const payload: MediaApOtaPreflightCreateRequest = {
+        observed_at: nowIso(),
+        raw_cli_output: form.raw_cli_output,
+        target_client_mac: targetMac,
+        target_client_associated: form.target_client_associated,
+        serving_ap_name: form.serving_ap_name || undefined,
+        serving_ap_mac: form.serving_ap_mac || undefined,
+        serving_ap_mode: form.serving_ap_mode || undefined,
+        target_radio: form.target_radio || undefined,
+        target_band: form.target_band || undefined,
+        target_channel: form.target_channel ? Number(form.target_channel) : undefined,
+        target_channel_width: form.target_channel_width || undefined,
+        site_tag: form.site_tag || undefined,
+        ap_join_profile: form.ap_join_profile || undefined,
+        packet_capture_profile: form.packet_capture_profile || undefined,
+        site_capture_status_verified: form.site_capture_status_verified,
+        existing_site_capture_active: form.existing_site_capture_active,
+        classifiers: form.classifiers,
+        ftp_server_host: form.ftp_server_host || undefined,
+        ftp_path: form.ftp_path || undefined,
+        ftp_username: form.ftp_username || undefined,
+        notes: form.notes || undefined
+      }
+      const result = await createMediaQoeApOtaPreflight(sessionId, payload)
+      onMessage(`Recorded preflight ${result.preflight.preflight_id} (${result.preflight.effective_state}).`)
+      setForm(EMPTY_AP_OTA_FORM)
+      setShowForm(false)
+      onRefresh()
+    })
+
+  const onCreateLeg = () =>
+    runAction('Create AP-OTA companion leg', async () => {
+      if (!latest) return
+      const result = await createMediaQoeApOtaCompanionLeg(latest.preflight_id)
+      onMessage(`Prepared AP-OTA companion leg ${field(result.leg, 'leg_id')}.`)
+      onRefresh()
+    })
+
+  const setClassifier = (name: string, value: boolean) =>
+    setForm((prev) => ({ ...prev, classifiers: { ...prev.classifiers, [name]: value } }))
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">AP OTA</p>
+          <h3 className="mt-1 text-lg font-semibold text-slate-50">AP OTA – C1000 Receiver</h3>
+          <p className="mt-1 text-sm text-slate-400">
+            Live, evidence-backed preflight before any AP packet capture. Discovery is read-only; capture start/stop is not
+            available here.
+          </p>
+        </div>
+        {statusPill(effectiveState.replaceAll('_', ' '), effectiveState === 'ready_to_prepare' ? 'emerald' : 'slate')}
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-5">
+        <div><p className="text-xs uppercase text-slate-500">Target receiver</p><p className="text-sm text-slate-200">{targetName}</p></div>
+        <div><p className="text-xs uppercase text-slate-500">MAC</p><p className="font-mono text-sm text-slate-200">{targetMac}</p></div>
+        <div><p className="text-xs uppercase text-slate-500">Capture mode</p><p className="text-sm text-slate-200">static</p></div>
+        <div><p className="text-xs uppercase text-slate-500">Transfer</p><p className="text-sm text-slate-200">FTP</p></div>
+        <div><p className="text-xs uppercase text-slate-500">Preflight freshness</p><p className="text-sm text-slate-200">120 seconds</p></div>
+      </div>
+
+      <div className="mt-4 overflow-hidden rounded-md border border-slate-800">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-slate-950/60 text-xs uppercase text-slate-500">
+            <tr><th className="px-3 py-2">Gate</th><th className="px-3 py-2">State</th><th className="px-3 py-2">Evidence</th></tr>
+          </thead>
+          <tbody className="divide-y divide-slate-800 text-slate-300">
+            <tr><td className="px-3 py-2">C1000 association</td><td className="px-3 py-2">{apOtaGatePill(associationState, { pass: 'Pass', fail: 'Fail', unknown: 'Unknown' })}</td><td className="px-3 py-2 text-xs">{latest ? `Observed ${detailField(latest as unknown as Record<string, unknown>, 'observed_at', '—')}` : 'No preflight recorded'}</td></tr>
+            <tr><td className="px-3 py-2">Serving AP</td><td className="px-3 py-2">{apOtaGatePill(servingApState, { pass: 'Pass', fail: 'Fail', unknown: 'Unknown' })}</td><td className="px-3 py-2 font-mono text-xs">{latest?.serving_ap_name || '—'}</td></tr>
+            <tr><td className="px-3 py-2">Site capture lock</td><td className="px-3 py-2">{apOtaGatePill(siteLockState, { pass: 'Pass', fail: 'Fail', unknown: 'Unknown' })}</td><td className="px-3 py-2 text-xs">show ap status packet-capture</td></tr>
+            <tr><td className="px-3 py-2">Profile mapping</td><td className="px-3 py-2">{apOtaGatePill(profileState, { pass: 'Pass', fail: 'Fail', unknown: 'Unknown' })}</td><td className="px-3 py-2 font-mono text-xs">{latest?.packet_capture_profile || '—'}</td></tr>
+            <tr><td className="px-3 py-2">Required classifiers</td><td className="px-3 py-2">{apOtaGatePill(classifierState, { pass: 'Pass', fail: 'Fail', unknown: 'Unknown' })}</td><td className="px-3 py-2 text-xs">{!latest ? 'profile detail' : missingClassifiers.length ? `missing: ${missingClassifiers.join(', ')}` : 'all seven confirmed'}</td></tr>
+            <tr><td className="px-3 py-2">FTP intake</td><td className="px-3 py-2">{apOtaGatePill(ftpState, { pass: 'Pass', fail: 'Fail', unknown: 'Unknown' })}</td><td className="px-3 py-2 font-mono text-xs">{latest?.ftp_server_host || '—'}</td></tr>
+            <tr><td className="px-3 py-2">Static target freshness</td><td className="px-3 py-2">{apOtaGatePill(freshnessState, { pass: 'Fresh', fail: 'Expired', unknown: 'Unknown' })}</td><td className="px-3 py-2 text-xs">{latest ? `expires ${detailField(latest as unknown as Record<string, unknown>, 'expires_at', '—')}` : '—'}</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      {latest && blockers.length > 0 && (
+        <ul className="mt-3 space-y-1 rounded-md border border-amber-900 bg-amber-950/20 p-3 text-xs text-amber-100">
+          {blockers.map((blocker) => <li key={blocker}>• {blocker}</li>)}
+        </ul>
+      )}
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button className="rounded-md border border-cyan-500/60 px-3 py-2 text-sm text-cyan-100 disabled:opacity-50" disabled={busy || working} onClick={() => { void onDownloadDiscovery() }}>
+          Download discovery commands
+        </button>
+        <button className="rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 disabled:opacity-50" disabled={busy || working} onClick={() => setShowForm((value) => !value)}>
+          {showForm ? 'Hide preflight form' : 'Record preflight evidence'}
+        </button>
+        <button className="rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 disabled:opacity-50" disabled={busy || working} onClick={onRefresh}>
+          Refresh gate evaluation
+        </button>
+        <button
+          className="rounded-md border border-emerald-500/60 px-3 py-2 text-sm text-emerald-100 disabled:opacity-40"
+          disabled={!canCreateLeg}
+          title={canCreateLeg ? 'Prepare an AP-OTA companion leg from this preflight' : 'Requires a fresh ready_to_prepare preflight'}
+          onClick={() => { void onCreateLeg() }}
+        >
+          Create AP-OTA companion leg
+        </button>
+      </div>
+
+      {Object.keys(discoverySheets).length > 0 && (
+        <div className="mt-4 grid gap-3">
+          {Object.entries(discoverySheets).map(([name, text]) => (
+            <CommandSheetPanel key={name} title={name} text={text} onCopied={onMessage} />
+          ))}
+        </div>
+      )}
+
+      {showForm && (
+        <div className="mt-4 space-y-3 rounded-md border border-slate-800 bg-slate-950/40 p-4">
+          <p className="text-xs text-slate-400">
+            Paste the recorded read-only WLC output, then assert the structured facts you observed in it. The gate state is
+            derived from these facts; it cannot be selected. FTP passwords are never accepted.
+          </p>
+          <label className="block text-sm text-slate-300">
+            <span>Recorded WLC CLI output</span>
+            <textarea className={`${inputClass()} mt-1 h-32 font-mono`} value={form.raw_cli_output} onChange={(event) => setForm((prev) => ({ ...prev, raw_cli_output: event.target.value }))} placeholder="Paste show wireless client / show ap status packet-capture / profile detail output" />
+          </label>
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="text-sm text-slate-300"><span>Serving AP name</span><input className={`${inputClass()} mt-1`} value={form.serving_ap_name} onChange={(event) => setForm((prev) => ({ ...prev, serving_ap_name: event.target.value }))} /></label>
+            <label className="text-sm text-slate-300"><span>Site tag</span><input className={`${inputClass()} mt-1`} value={form.site_tag} onChange={(event) => setForm((prev) => ({ ...prev, site_tag: event.target.value }))} /></label>
+            <label className="text-sm text-slate-300"><span>AP join profile</span><input className={`${inputClass()} mt-1`} value={form.ap_join_profile} onChange={(event) => setForm((prev) => ({ ...prev, ap_join_profile: event.target.value }))} /></label>
+            <label className="text-sm text-slate-300"><span>Packet-capture profile</span><input className={`${inputClass()} mt-1`} value={form.packet_capture_profile} onChange={(event) => setForm((prev) => ({ ...prev, packet_capture_profile: event.target.value }))} /></label>
+            <label className="text-sm text-slate-300"><span>Radio / band</span><input className={`${inputClass()} mt-1`} value={form.target_radio} onChange={(event) => setForm((prev) => ({ ...prev, target_radio: event.target.value }))} placeholder="e.g. 5GHz" /></label>
+            <label className="text-sm text-slate-300"><span>Channel</span><input className={`${inputClass()} mt-1`} value={form.target_channel} onChange={(event) => setForm((prev) => ({ ...prev, target_channel: event.target.value }))} /></label>
+            <label className="text-sm text-slate-300"><span>FTP host</span><input className={`${inputClass()} mt-1`} value={form.ftp_server_host} onChange={(event) => setForm((prev) => ({ ...prev, ftp_server_host: event.target.value }))} /></label>
+            <label className="text-sm text-slate-300"><span>FTP path</span><input className={`${inputClass()} mt-1`} value={form.ftp_path} onChange={(event) => setForm((prev) => ({ ...prev, ftp_path: event.target.value }))} /></label>
+            <label className="text-sm text-slate-300"><span>FTP username</span><input className={`${inputClass()} mt-1`} value={form.ftp_username} onChange={(event) => setForm((prev) => ({ ...prev, ftp_username: event.target.value }))} /></label>
+          </div>
+          <div className="flex flex-wrap gap-4 text-sm text-slate-300">
+            <label className="flex items-center gap-2"><input type="checkbox" checked={form.target_client_associated} onChange={(event) => setForm((prev) => ({ ...prev, target_client_associated: event.target.checked }))} /> C1000 associated</label>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={form.site_capture_status_verified} onChange={(event) => setForm((prev) => ({ ...prev, site_capture_status_verified: event.target.checked }))} /> Site capture lock verified</label>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={form.existing_site_capture_active} onChange={(event) => setForm((prev) => ({ ...prev, existing_site_capture_active: event.target.checked }))} /> Another site capture active</label>
+          </div>
+          <div>
+            <p className="text-xs uppercase text-slate-500">Profile classifiers (all seven required)</p>
+            <div className="mt-2 flex flex-wrap gap-3 text-sm text-slate-300">
+              {AP_OTA_CLASSIFIERS.map((name) => (
+                <label key={name} className="flex items-center gap-2"><input type="checkbox" checked={form.classifiers[name]} onChange={(event) => setClassifier(name, event.target.checked)} /> {name}</label>
+              ))}
+            </div>
+          </div>
+          <button className="rounded-md border border-emerald-500/60 px-3 py-2 text-sm text-emerald-100 disabled:opacity-50" disabled={busy || working || !form.raw_cli_output.trim()} onClick={() => { void onRecordPreflight() }}>
+            Save preflight evidence
+          </button>
+        </div>
+      )}
+    </Card>
+  )
+}
+
 function OperatorConsole({
   detail,
   defaults,
@@ -715,6 +1015,8 @@ function OperatorConsole({
             I completed WLC cleanup
           </button>
         </Card>
+
+        <ApOtaPanel detail={detail} busy={busy} onRefresh={onRefresh} onMessage={onMessage} />
       </div>
     </div>
   )
