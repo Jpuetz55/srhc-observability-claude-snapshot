@@ -22,6 +22,7 @@ output-only WLC console recorder contract
 block-level WLC transcript parser contract
 bounded WLC ingest status/metrics endpoints in source
 versioned Media QoE migration framework in source
+investigation-first Vocera multicast UI source contract
 ```
 
 Not run in this validation pass:
@@ -32,6 +33,7 @@ production ingest timer enablement
 live 90-second WLC EPC smoke export
 long reproduction capture
 manual WLC SSH console recording against a real controller
+browser smoke of the investigation-first multicast UI against production data
 ```
 
 ## Live Runtime Gate - 2026-06-26
@@ -101,6 +103,17 @@ still points at this checkout.
 
 Do not apply production DB changes, enable the WLC ingest timer, or gather WLC
 data until the endpoint go condition below passes.
+
+Also do not use the WLC multicast page for live controller work until the UI
+smoke confirms these source-level constraints in the running browser bundle:
+
+```text
+no WLC controls before an investigation is selected
+one explicit selected WLC session in the URL/state
+operator buttons record intent only
+capture profile defaults are read-only unless advanced override is opened
+active-group selection is bound to the selected attempt/session
+```
 
 The operational gate remains:
 
