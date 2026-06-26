@@ -6,8 +6,8 @@ import {
   getMediaQoeExecutionStatus,
   getMediaQoeSummary,
   getProjectMediaQoeSummary,
-  listProjects,
-  listProjectStudies,
+  listMediaQoeProjectStudies,
+  listMediaQoeProjects,
   listMediaQoeCaptureParseRuns,
   listProjectMediaQoeCaptures,
   listProjectMediaQoeDuplicates,
@@ -202,7 +202,7 @@ export function MediaQoeStudy({ config }: { config: AppConfig }) {
       try {
         setLoadingInitial(true)
         setBootstrapError(null)
-        const [response, projectResponse] = await Promise.all([getMediaQoeSummary(), listProjects()])
+        const [response, projectResponse] = await Promise.all([getMediaQoeSummary(), listMediaQoeProjects()])
         setSummaryResponse(response)
         const loadedProjects = projectResponse.projects ?? []
         setProjects(loadedProjects)
@@ -254,7 +254,7 @@ export function MediaQoeStudy({ config }: { config: AppConfig }) {
       try {
         setLoadingStudyOptions(true)
         setStudyError(null)
-        const response = await listProjectStudies(selectedProjectId)
+        const response = await listMediaQoeProjectStudies(selectedProjectId)
         const mediaStudies = (response.studies ?? []).filter((study) => field(study, 'study_type') === 'media_qoe')
         setStudies(mediaStudies)
         setSelectedStudyId((current) => {
