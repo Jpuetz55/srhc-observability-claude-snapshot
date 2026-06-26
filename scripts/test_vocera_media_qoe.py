@@ -987,6 +987,17 @@ def test_media_study_sql_contract() -> None:
     require("def validate_media_study_id" in fastapi_text, "Study Web should validate media_qoe study IDs")
     require("def validate_media_project_id" in fastapi_text, "Study Web should validate media_qoe project IDs")
     require("@app.get(\"/api/media-qoe/summary\")" in fastapi_text, "Study Web should expose media QoE summary")
+    for route in (
+        '@app.get("/api/media-qoe/projects")',
+        '@app.post("/api/media-qoe/projects")',
+        '@app.get("/api/media-qoe/projects/{project_id}/studies")',
+        '@app.post("/api/media-qoe/projects/{project_id}/studies")',
+        '@app.get("/api/media-qoe/studies/{study_id}")',
+    ):
+        require(route in fastapi_text, f"Study Web should expose Media QoE ownership route {route}")
+    media_project_routes = fastapi_text.split('@app.get("/api/media-qoe/projects")', 1)[1].split('@app.get("/api/media-qoe/execution/status")', 1)[0]
+    require("media_query_rows(" in media_project_routes and "media_query_one(" in media_project_routes, "Media QoE ownership routes must use the Media QoE database connection")
+    require("\n    query_rows(" not in media_project_routes and "\n    query_one(" not in media_project_routes, "Media QoE ownership routes must not use the primary RF/Study database connection")
     require("@app.get(\"/api/media-qoe/execution/status\")" in fastapi_text, "Study Web should expose media execution guardrail status")
     require("@app.get(\"/api/projects/{project_id}/media-qoe/summary\")" in fastapi_text, "Study Web should expose media project summary")
     require("@app.get(\"/api/projects/{project_id}/media-qoe/captures\")" in fastapi_text, "Study Web should expose media project captures")
@@ -1058,6 +1069,9 @@ def test_media_study_sql_contract() -> None:
     for field_name in ("trusted_rtp_dscp_mismatch_stream_count", "non_rtp_dscp_mismatch_stream_count"):
         require(field_name in fastapi_text, f"Study Web should expose {field_name} in DNAC/raw capture state")
     require((ROOT / "scripts" / "smoke_vocera_media_qoe_workflow.py").is_file(), "missing media QoE live smoke script")
+    media_smoke_text = (ROOT / "scripts" / "smoke_vocera_media_qoe_workflow.py").read_text(encoding="utf-8")
+    require("/api/media-qoe/projects" in media_smoke_text, "media QoE smoke should verify Media QoE-owned project routes")
+    require("--create-disposable-wlc-session" in media_smoke_text, "media QoE smoke should offer a disposable WLC session ownership path")
     require("projectType?: ProjectType" in project_selector_text, "ProjectSelector should support projectType filtering")
     require("project_type === projectType || project.project_type === 'mixed'" in project_selector_text, "ProjectSelector should allow mixed projects")
     require("studyType?: StudyType" in study_selector_text, "StudySelector should support studyType filtering")
@@ -1074,7 +1088,8 @@ def test_media_study_sql_contract() -> None:
     require("StudySelector" in media_page_text, "Media QoE page should use StudySelector")
     require('projectType="media_qoe"' in media_page_text, "Media QoE page should select media_qoe projects")
     require('studyType="media_qoe"' in media_page_text, "Media QoE page should select media_qoe studies")
-    require("listProjects" in media_page_text and "listProjectStudies" in media_page_text, "Media QoE page should load generic project/study options")
+    require("listMediaQoeProjects" in media_page_text and "listMediaQoeProjectStudies" in media_page_text, "Media QoE page should load Media QoE-owned project/study options")
+    require("listProjects" not in media_page_text and "listProjectStudies" not in media_page_text, "Media QoE page must not use generic RF/Study project ownership APIs")
     require("summaryResponse?.studies" not in media_page_text, "Media QoE page should not build study options only from default media summary")
     require("ICAP QoE" in app_text and "Vocera multicast" in app_text, "Study Web should expose separate ICAP and multicast navigation entries")
     require("VoceraMulticastStudy" in app_text, "Study Web should mount the multicast investigation page separately")
@@ -1082,6 +1097,9 @@ def test_media_study_sql_contract() -> None:
     require("Catalyst Center ICAP" in media_page_text, "ICAP QoE page should retain ICAP workflow")
     require("Vocera multicast" in multicast_page_text and "MediaWlcCaptureSessions" in multicast_page_text, "multicast page should own WLC capture sessions")
     require("ICAP capture QoE remains on its own page" in multicast_page_text, "multicast page should explicitly separate itself from ICAP QoE")
+    require("listMediaQoeProjects" in multicast_page_text and "listMediaQoeProjectStudies" in multicast_page_text, "multicast page should load Media QoE-owned project/study options")
+    require("createMediaQoeProject" in multicast_page_text and "createMediaQoeProjectStudy" in multicast_page_text, "multicast page should create Media QoE-owned investigations")
+    require("listProjects" not in multicast_page_text and "listProjectStudies" not in multicast_page_text, "multicast page must not use generic RF/Study project ownership APIs")
     require("MediaExecutionStatusResponse" in api_types_text, "API types should include media execution status response")
     require("MediaDnacStatusResponse" in api_types_text, "API types should include DNAC/iCAP readiness response")
     require("MediaDnacCapturesResponse" in api_types_text and "MediaDnacCaptureQuery" in api_types_text, "API types should include DNAC/iCAP capture listing response")
@@ -1094,6 +1112,9 @@ def test_media_study_sql_contract() -> None:
     require("raw_dir_readable" in api_types_text and "archive_enabled" in api_types_text, "media execution status type should expose guardrails")
     require("parse_running" in api_types_text and "active_parse" in api_types_text, "media execution status type should expose active parse state")
     require("getMediaQoeExecutionStatus" in api_client_text, "API client should expose media execution status")
+    require("listMediaQoeProjects" in api_client_text and "createMediaQoeProject" in api_client_text, "API client should expose Media QoE project ownership helpers")
+    require("listMediaQoeProjectStudies" in api_client_text and "createMediaQoeProjectStudy" in api_client_text, "API client should expose Media QoE study ownership helpers")
+    require("getMediaQoeStudy" in api_client_text, "API client should expose Media QoE study lookup")
     require("getMediaQoeDnacStatus" in api_client_text, "API client should expose DNAC/iCAP readiness status")
     require("getMediaQoeWlcDefaults" in api_client_text, "API client should expose WLC defaults")
     require("createStudyMediaQoeWlcSession" in api_client_text, "API client should create WLC sessions")
@@ -1107,6 +1128,7 @@ def test_media_study_sql_contract() -> None:
     require("selectedSessionId" in media_wlc_sessions_text and "getMediaQoeWlcSession" in media_wlc_sessions_text, "WLC session UI should operate on an explicit selected session")
     require("latestRunningSession" not in media_wlc_sessions_text, "WLC session UI must not target the first running session implicitly")
     require("Capture profile" in media_wlc_sessions_text and "Advanced overrides" in media_wlc_sessions_text, "WLC session UI should show a capture profile with explicit override path")
+    require("hasCompleteCaptureProfile" in media_wlc_sessions_text and "validMediaStudy" in media_wlc_sessions_text, "WLC session UI should gate creation on valid study ownership and complete profile defaults")
     require("Vocera VLAN" in media_wlc_sessions_text and "Override active-group VLAN reason" in media_wlc_sessions_text, "WLC session UI should preserve VLAN authority and require override reasons")
     require("Find candidate groups" in media_wlc_sessions_text, "WLC session UI should require explicit active-group selection")
     require("I started the WLC capture" in media_wlc_sessions_text and "I confirmed SCP export succeeded" in media_wlc_sessions_text, "WLC session UI should label operator-recorded actions clearly")
