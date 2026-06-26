@@ -24,6 +24,8 @@ vocera_multicast:
 
 wlc_capture:
   wlc_name: SRHC-WLC-40G-SEC
+  wlc_ssh_host: 10.16.59.252
+  wlc_ssh_port: 22
   # Leave blank so Study Web/CLI generate a unique, WLC-safe capture name per
   # session. A static name eventually collides on the controller.
   capture_name: ""
@@ -47,6 +49,21 @@ wlc_capture:
     model: C1000
     ip: 10.16.88.230
     mac: 00:09:ef:61:0b:f7
+
+ap_ota_capture:
+  target_client_role: receiver
+  target_client_mac: 00:09:ef:61:0b:f7
+  target_client_ip: 10.16.88.230
+  capture_mode: static
+  transfer_protocol: ftp
+  ftp_drop_dir: /var/lib/vocera-media-qoe/ap-ota-drop
+  management_classifier_enabled: false
+  control_classifier_enabled: false
+  multicast_classifier_enabled: false
+  broadcast_classifier_enabled: false
+  data_classifier_enabled: false
+  ip_classifier_enabled: false
+  udp_classifier_enabled: false
 
 servers:
   - name: vocera-server
