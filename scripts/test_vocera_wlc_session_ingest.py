@@ -336,6 +336,7 @@ def test_study_web_ingest_contract() -> None:
     # Session-EPC ingest pipeline and endpoints.
     require('capture_point="wlc_epc"' in main_text, "WLC ingest must register captures as wlc_epc")
     require('@app.post("/api/media-qoe/wlc/sessions/ingest-scan")' in main_text, "Study Web should expose the ingest-scan trigger")
+    require('@app.get("/api/media-qoe/wlc/sessions/{session_id}")' in main_text, "Study Web should expose a coherent selected-session read model")
     require('@app.get("/api/media-qoe/wlc/sessions/{session_id}/artifacts")' in main_text, "Study Web should expose session artifact status")
     require("def media_wlc_validate_session_capture(" in main_text, "Study Web should validate session-package captures separately")
     require("wlc_ingest.finalize_upload_to_pcaps(" in main_text, "ingest must finalize uploads into service-owned pcaps/ artifacts")
