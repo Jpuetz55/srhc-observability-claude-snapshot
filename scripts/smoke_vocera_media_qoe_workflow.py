@@ -120,10 +120,14 @@ def main(argv: list[str] | None = None) -> int:
         "default Media QoE project is present in Media QoE ownership list",
     )
 
-    media_studies = api_json(args.api_base, f"/api/media-qoe/projects/{urllib.parse.quote(args.project_id)}/studies")
-    require(media_studies.get("ok") is True and isinstance(media_studies.get("studies"), list), "Media QoE-owned study list returns rows")
+    media_project_studies = api_json(args.api_base, f"/api/media-qoe/projects/{urllib.parse.quote(args.project_id)}/studies")
+    require(media_project_studies.get("ok") is True and isinstance(media_project_studies.get("studies"), list), "Media QoE-owned study list returns rows")
     require(
-        any(item.get("study_id") == args.study_id for item in media_studies.get("studies", [])),
+        all(str(row.get("study_type") or "") == "media_qoe" for row in media_project_studies["studies"]),
+        "Media QoE-owned study list exposes only media_qoe study_type rows",
+    )
+    require(
+        any(item.get("study_id") == args.study_id for item in media_project_studies.get("studies", [])),
         "default Media QoE study is present in Media QoE ownership list",
     )
 
