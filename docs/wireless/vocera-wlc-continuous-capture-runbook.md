@@ -66,7 +66,8 @@ Open the WLC from the session page command or from the Make target:
 ```bash
 make vocera-media-qoe-wlc-session-console \
   SESSION_DIR=/var/lib/vocera-media-qoe/raw/wlc-sessions/<study>/<session> \
-  WLC_SSH_HOST=SRHC-WLC-40G-SEC \
+  WLC_SSH_HOST=10.16.59.252 \
+  WLC_SSH_PORT=22 \
   WLC_SSH_USER=<operator-wlc-user>
 ```
 
