@@ -42,11 +42,21 @@ def test_script_contract() -> None:
 def test_make_and_ui_contract() -> None:
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     ui = (ROOT / "web" / "study-ui" / "src" / "components" / "MediaWlcCaptureSessions.tsx").read_text(encoding="utf-8")
+    api_types = (ROOT / "web" / "study-ui" / "src" / "api" / "types.ts").read_text(encoding="utf-8")
+    main = (ROOT / "tools" / "study_web" / "main.py").read_text(encoding="utf-8")
+    config = (ROOT / "config" / "vocera-media-qoe.yaml").read_text(encoding="utf-8")
     require("vocera-media-qoe-wlc-session-console:" in makefile, "Makefile must expose the console target")
     require("run_vocera_wlc_session_console.sh" in makefile, "Makefile console target must call the recorder")
     require("WLC_SSH_USER" in makefile and "WLC_SSH_HOST" in makefile, "console target must require explicit SSH identity")
+    require("WLC_SSH_HOST ?= $(WLC_NAME)" not in makefile, "console SSH host must not default to the WLC display name")
+    require('wlc_ssh_host: 10.16.59.252' in config, "site config must define the WLC SSH endpoint separately from wlc_name")
+    require('"wlc_ssh_host": wlc.get("wlc_ssh_host") or ""' in main, "Study Web defaults must expose wlc_ssh_host")
+    require("wlc_ssh_host?: string" in api_types and "wlc_ssh_port?: number" in api_types, "frontend defaults type must include WLC SSH endpoint fields")
     require("Logged WLC console" in ui, "session UI must expose logged-console command guidance")
     require("vocera-media-qoe-wlc-session-console" in ui, "session UI should generate the console make command")
+    require("field(session, 'wlc_name')" not in ui.split("const consoleCommand =", 1)[1].split("const startSheet =", 1)[0], "console command must not use wlc_name as the SSH destination")
+    require("WLC_SSH_HOST=${shellQuote(wlcSshHost)}" in ui, "console command should use the configured WLC SSH host")
+    require("WLC_SSH_PORT=${shellQuote(String(wlcSshPort))}" in ui, "console command should include the configured WLC SSH port")
 
 
 def test_help_runs() -> None:
