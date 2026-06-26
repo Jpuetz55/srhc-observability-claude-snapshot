@@ -220,6 +220,45 @@ create table if not exists vocera_media_capture_sessions (
   updated_at timestamptz
 );
 
+create table if not exists vocera_media_capture_legs (
+  leg_id text primary key,
+  capture_session_id text not null references vocera_media_capture_sessions(session_id) on delete cascade,
+  leg_type text not null
+    check (leg_type in ('wlc_epc', 'ap_client_ota', 'wired_vlan_span', 'icap_ota')),
+  leg_state text not null default 'preflight_required'
+    check (leg_state in (
+      'preflight_required', 'preflight_blocked', 'ready', 'prepared',
+      'running', 'stopped', 'attached', 'parsed', 'failed', 'aborted'
+    )),
+  target_client_mac text,
+  target_client_ip inet,
+  target_client_role text,
+  target_ap_name text,
+  target_ap_mac text,
+  target_bssid text,
+  target_radio text,
+  target_band text,
+  target_channel integer,
+  target_channel_width text,
+  capture_mode text,
+  transfer_protocol text,
+  transfer_host text,
+  transfer_path text,
+  profile_name text,
+  started_at timestamptz,
+  stopped_at timestamptz,
+  created_by text,
+  raw_context jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz
+);
+
+create index if not exists idx_vocera_media_capture_legs_session
+  on vocera_media_capture_legs (capture_session_id, leg_type, leg_state);
+
+create index if not exists idx_vocera_media_capture_legs_target
+  on vocera_media_capture_legs (target_client_mac, target_ap_name);
+
 create table if not exists vocera_media_broadcast_attempts (
   attempt_id text primary key,
   study_id text references vocera_studies(study_id),
@@ -724,8 +763,12 @@ create index if not exists idx_vocera_media_attempt_findings_attempt
 create table if not exists vocera_media_session_artifacts (
   artifact_id text primary key,
   capture_session_id text not null references vocera_media_capture_sessions(session_id) on delete cascade,
+  capture_leg_id text references vocera_media_capture_legs(leg_id) on delete set null,
   artifact_kind text not null
-    check (artifact_kind in ('wlc_epc', 'wlc_terminal_output', 'wlc_terminal_timing', 'wlc_transcript')),
+    check (artifact_kind in (
+      'wlc_epc', 'wlc_terminal_output', 'wlc_terminal_timing', 'wlc_transcript',
+      'ap_ota_pcap', 'ap_ota_terminal_output', 'ap_ota_terminal_timing', 'ap_ota_metadata'
+    )),
   source_path text not null,
   final_path text,
   source_name text not null,
@@ -762,6 +805,25 @@ create index if not exists idx_vocera_media_session_artifacts_capture
 create unique index if not exists uq_vocera_media_session_artifacts_session_sha
   on vocera_media_session_artifacts (capture_session_id, sha256)
   where sha256 is not null;
+
+alter table vocera_media_session_artifacts
+  add column if not exists capture_leg_id text references vocera_media_capture_legs(leg_id) on delete set null;
+
+create index if not exists idx_vocera_media_session_artifacts_leg
+  on vocera_media_session_artifacts (capture_leg_id, artifact_kind);
+
+alter table vocera_media_session_artifacts
+  drop constraint if exists vocera_media_session_artifacts_artifact_kind_check;
+
+alter table vocera_media_session_artifacts
+  drop constraint if exists chk_vocera_media_session_artifacts_artifact_kind;
+
+alter table vocera_media_session_artifacts
+  add constraint chk_vocera_media_session_artifacts_artifact_kind
+  check (artifact_kind in (
+    'wlc_epc', 'wlc_terminal_output', 'wlc_terminal_timing', 'wlc_transcript',
+    'ap_ota_pcap', 'ap_ota_terminal_output', 'ap_ota_terminal_timing', 'ap_ota_metadata'
+  ));
 
 alter table vocera_media_session_artifacts
   drop constraint if exists vocera_media_session_artifacts_ingest_state_check;
