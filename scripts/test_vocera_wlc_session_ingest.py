@@ -359,6 +359,7 @@ def test_study_web_ingest_contract() -> None:
     require('"wlc_terminal_output"' in main_text, "terminal output should be recorded as a session artifact")
     require('@app.get("/api/media-qoe/wlc/ingest/status")' in main_text, "Study Web should expose WLC ingest status")
     require('@app.get("/api/media-qoe/wlc/ingest/metrics")' in main_text, "Study Web should expose bounded WLC ingest metrics")
+    require('@app.get("/metrics")' in main_text, "Study Web should expose top-level Prometheus metrics for deployment checks")
     require("vocera_wlc_ingest_artifacts_total{{state=" in main_text, "metrics may label bounded ingest states")
     require("vocera_wlc_ingest_quarantined_total{{reason=" in main_text, "metrics may label bounded quarantine reasons")
     metrics_text = main_text.split("def media_wlc_ingest_metrics_text()", 1)[1].split("def media_require_local_request", 1)[0]
