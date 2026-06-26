@@ -362,6 +362,8 @@ export type MediaWlcDefaultsResponse = {
   defaults: {
     site?: string
     wlc_name?: string
+    wlc_ssh_host?: string
+    wlc_ssh_port?: number
     capture_name?: string
     wlc_interface?: string
     capture_filter_mode?: string
@@ -443,6 +445,8 @@ export type MediaWlcSessionDetailResponse = {
   attempts: StringRow[]
   events: StringRow[]
   artifacts: StringRow[]
+  capture_legs?: StringRow[]
+  ap_ota_preflight?: Record<string, unknown>
   command_sheets: Record<string, string>
   ingest_status?: Record<string, unknown>
   open_attempt_id?: string | null
