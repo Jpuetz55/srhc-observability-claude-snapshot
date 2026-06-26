@@ -74,7 +74,7 @@ show monitor capture <CAPTURE_NAME>
 monitor capture <CAPTURE_NAME> interface Port-channel 1 both
 monitor capture <CAPTURE_NAME> buffer circular file 5 file-size 100
 monitor capture <CAPTURE_NAME> access-list <TEMPORARY_ACL_NAME>
-monitor capture <CAPTURE_NAME> match ipv4
+monitor capture <CAPTURE_NAME> match ipv4 any any
 monitor capture <CAPTURE_NAME> inner mac <V5000_MAC> <C1000_MAC>
 monitor capture <CAPTURE_NAME> limit duration 90
 monitor capture <CAPTURE_NAME> start
@@ -90,7 +90,7 @@ show monitor capture <CAPTURE_NAME>
 monitor capture <CAPTURE_NAME> interface Port-channel 1 both
 monitor capture <CAPTURE_NAME> buffer circular file 5 file-size 100
 monitor capture <CAPTURE_NAME> access-list <TEMPORARY_ACL_NAME>
-monitor capture <CAPTURE_NAME> match ipv4
+monitor capture <CAPTURE_NAME> match ipv4 any any
 monitor capture <CAPTURE_NAME> inner mac <V5000_MAC> <C1000_MAC>
 monitor capture <CAPTURE_NAME> start
 ```

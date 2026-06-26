@@ -386,6 +386,103 @@ def test_resolve_group_persists_and_enforces_vlan() -> None:
         require(attempts[0]["vlan_override_reason"] == "live broadcast on 688", f"override reason must persist: {attempts}")
 
 
+def test_acl_name_stays_within_wlc_limit() -> None:
+    """Temporary ACL names must fit the observed WLC-safe limit, prefix-preserved."""
+
+    short = session.acl_name("VOCERA_C1000_001")
+    require(short == "VOCERA_EPC_VOCERA_C1000_001", f"short ACL name should be stable: {short}")
+    long_capture = "VOCERA_260624_1512_VERYLONGCAPTURENAME_TAIL"
+    long_name = session.acl_name(long_capture)
+    require(len(long_name) <= session.WLC_ACL_NAME_MAX_CHARS, f"ACL name exceeds limit: {long_name}")
+    require(len(long_name) <= 31, f"ACL name must be <= 31 chars: {long_name}")
+    require(long_name.startswith("VOCERA_EPC_"), f"ACL name must preserve prefix: {long_name}")
+    require(not long_name.endswith("_"), f"ACL name should not end on a separator: {long_name}")
+    # The same input must always produce the same name so cleanup matches start.
+    require(session.acl_name(long_capture) == long_name, "ACL name must be deterministic")
+
+
+def test_epc_match_uses_valid_ipv4_syntax() -> None:
+    """Bare `match ipv4` is invalid IOS XE EPC syntax; require `match ipv4 any any`."""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        rc = session.main(
+            [
+                "init",
+                "--session-root",
+                tmp,
+                "--study-id",
+                "study_match",
+                "--session-id",
+                "sess_match",
+                "--wlc-name",
+                "SRHC-WLC-40G-SEC",
+                "--wlc-interface",
+                "Port-channel1",
+                "--collector-host",
+                "10.0.128.107",
+                "--collector-scp-username",
+                LOCAL_SCP_USER,
+                "--sender-mac",
+                "00:09:ef:54:5f:46",
+                "--sender-ip",
+                "10.16.88.228",
+                "--receiver-mac",
+                "00:09:ef:61:0b:f7",
+                "--receiver-ip",
+                "10.16.88.230",
+            ]
+        )
+        require(rc == 0, "session init should succeed")
+        target = Path(tmp) / "study_match" / "sess_match"
+        for sheet in ("start-long.cli", "start-short-validation.cli"):
+            text = (target / sheet).read_text(encoding="utf-8")
+            require("match ipv4 any any" in text, f"{sheet} must use valid match ipv4 any any")
+            require(
+                not re.search(r"match ipv4\s*$", text, flags=re.MULTILINE),
+                f"{sheet} must not emit bare `match ipv4`",
+            )
+
+
+def test_terminal_console_dir_is_operator_owned() -> None:
+    """cli/terminal/ must be pre-created mode 0700 and owned by the console account."""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        rc = session.main(
+            [
+                "init",
+                "--session-root",
+                tmp,
+                "--study-id",
+                "study_term",
+                "--session-id",
+                "sess_term",
+                "--wlc-name",
+                "SRHC-WLC-40G-SEC",
+                "--wlc-interface",
+                "Port-channel1",
+                "--collector-host",
+                "10.0.128.107",
+                "--collector-scp-username",
+                LOCAL_SCP_USER,
+                "--sender-mac",
+                "00:09:ef:54:5f:46",
+                "--sender-ip",
+                "10.16.88.228",
+                "--receiver-mac",
+                "00:09:ef:61:0b:f7",
+                "--receiver-ip",
+                "10.16.88.230",
+            ]
+        )
+        require(rc == 0, "session init should succeed")
+        terminal_dir = Path(tmp) / "study_term" / "sess_term" / "cli" / "terminal"
+        require(terminal_dir.is_dir(), "session package must pre-create cli/terminal/")
+        account = pwd.getpwnam(LOCAL_SCP_USER)
+        term_stat = terminal_dir.stat()
+        require(term_stat.st_uid == account.pw_uid, "cli/terminal/ must be owned by the console account")
+        require(stat.S_IMODE(term_stat.st_mode) == 0o700, "cli/terminal/ must have mode 0700")
+
+
 def main() -> int:
     test_long_session_package()
     test_incoming_staging_dir()
@@ -394,6 +491,9 @@ def main() -> int:
     test_duplicate_session_protection()
     test_attempt_lifecycle_one_open_per_session()
     test_resolve_group_persists_and_enforces_vlan()
+    test_acl_name_stays_within_wlc_limit()
+    test_epc_match_uses_valid_ipv4_syntax()
+    test_terminal_console_dir_is_operator_owned()
     print("OK: WLC capture-session package tests passed")
     return 0
 

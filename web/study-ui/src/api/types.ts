@@ -439,6 +439,74 @@ export type MediaWlcSessionResponse = {
   message?: string
 }
 
+export type MediaApOtaEvaluationState =
+  | 'blocked'
+  | 'ready_for_profile_change'
+  | 'ready_for_ftp_validation'
+  | 'ready_to_prepare'
+
+export type MediaApOtaPreflightRun = {
+  preflight_id: string
+  capture_session_id: string
+  target_client_mac: string
+  target_client_associated: string | boolean
+  observed_at: string
+  expires_at: string
+  serving_ap_name?: string | null
+  serving_ap_mac?: string | null
+  serving_ap_mode?: string | null
+  target_radio?: string | null
+  target_band?: string | null
+  target_channel?: string | null
+  target_channel_width?: string | null
+  site_tag?: string | null
+  ap_join_profile?: string | null
+  packet_capture_profile?: string | null
+  site_capture_status_verified?: string | boolean
+  existing_site_capture_active?: string | boolean | null
+  capture_capability?: string
+  classifiers?: Record<string, boolean> | string
+  ftp_server_host?: string | null
+  ftp_path?: string | null
+  ftp_username?: string | null
+  transcript_sha256?: string | null
+  transcript_relpath?: string | null
+  evaluation_state: MediaApOtaEvaluationState
+  effective_state: MediaApOtaEvaluationState
+  blockers?: string[] | string
+  fresh?: boolean
+  age_seconds?: number | null
+  can_create_companion_leg?: boolean
+  notes?: string | null
+  // FTP password fields are never present: the API forbids and strips them.
+}
+
+export type MediaApOtaPreflightCreateRequest = {
+  observed_at: string
+  raw_cli_output: string
+  target_client_mac: string
+  target_client_associated: boolean
+  target_client_ip?: string
+  serving_ap_name?: string
+  serving_ap_mac?: string
+  serving_ap_mode?: string
+  target_radio?: string
+  target_band?: string
+  target_channel?: number
+  target_channel_width?: string
+  site_tag?: string
+  ap_join_profile?: string
+  packet_capture_profile?: string
+  site_capture_status_verified?: boolean
+  existing_site_capture_active?: boolean
+  active_capture_client_mac?: string
+  classifiers?: Record<string, boolean>
+  ftp_server_host?: string
+  ftp_path?: string
+  ftp_username?: string
+  notes?: string
+}
+
 export type MediaWlcSessionDetailResponse = {
   ok: boolean
   session: StringRow
@@ -447,6 +515,8 @@ export type MediaWlcSessionDetailResponse = {
   artifacts: StringRow[]
   capture_legs?: StringRow[]
   ap_ota_preflight?: Record<string, unknown>
+  ap_ota_defaults?: Record<string, unknown>
+  ap_ota_preflight_runs?: MediaApOtaPreflightRun[]
   command_sheets: Record<string, string>
   ingest_status?: Record<string, unknown>
   open_attempt_id?: string | null
