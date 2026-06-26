@@ -1,37 +1,52 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   createMediaQoeWlcSessionEvent,
   createStudyMediaQoeWlcSession,
   getMediaQoeWlcDefaults,
-  listMediaQoeWlcSessionArtifacts,
-  listMediaQoeWlcSessionAttempts,
+  getMediaQoeWlcSession,
   listStudyMediaQoeWlcSessions,
   setMediaQoeWlcAttemptActiveGroup,
+  setMediaQoeWlcAttemptOutcome,
+  startMediaQoeWlcAttempt,
   updateMediaQoeWlcSession
 } from '../api/client'
-import type { MediaWlcDefaultsResponse, MediaWlcSessionCreateRequest, StringRow } from '../api/types'
-import { CollapsibleCard } from './CollapsibleCard'
+import type {
+  MediaWlcDefaultsResponse,
+  MediaWlcSessionCreateRequest,
+  MediaWlcSessionDetailResponse,
+  StringRow
+} from '../api/types'
+import { Card } from './Card'
 
-function field(row: StringRow | null | undefined, key: string, fallback = ''): string {
-  return row?.[key] ?? fallback
+type GroupCandidate = {
+  group: string
+  vlan: number
+  mgid: number | null
+  row: string
 }
 
-function nowIso(): string {
-  return new Date().toISOString()
+type CreateForm = {
+  capture_purpose: 'short_validation' | 'incident_reproduction' | 'extended_monitored'
+  notes: string
+  advanced: boolean
+  override_reason: string
+  wlc_interface: string
+  ring_file_count: string
+  ring_file_size_mb: string
+  vocera_vlan: string
 }
 
-function textInputClass(): string {
-  return 'w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400'
+const EMPTY_CREATE_FORM: CreateForm = {
+  capture_purpose: 'short_validation',
+  notes: '',
+  advanced: false,
+  override_reason: '',
+  wlc_interface: '',
+  ring_file_count: '',
+  ring_file_size_mb: '',
+  vocera_vlan: ''
 }
 
-function numericValue(value: string, fallback: number): number {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : fallback
-}
-
-// Friendly labels for the session EPC ingest lifecycle. The collector detects a
-// completed SCP upload, finalizes it as service-owned pcaps/ evidence, and
-// parses it automatically; these states surface that progress for the operator.
 const INGEST_STATE_LABELS: Record<string, string> = {
   waiting_for_export: 'Waiting for WLC export',
   upload_detected: 'Upload detected',
@@ -46,6 +61,31 @@ const INGEST_STATE_LABELS: Record<string, string> = {
   failed: 'Failed',
   retry_pending: 'Retry pending',
   quarantined: 'Quarantined'
+}
+
+function field(row: StringRow | null | undefined, key: string, fallback = ''): string {
+  return row?.[key] ?? fallback
+}
+
+function detailField(row: Record<string, unknown> | null | undefined, key: string, fallback = ''): string {
+  const value = row?.[key]
+  if (value === null || value === undefined || value === '') {
+    return fallback
+  }
+  return String(value)
+}
+
+function nowIso(): string {
+  return new Date().toISOString()
+}
+
+function inputClass(): string {
+  return 'w-full rounded-md border border-slate-700 bg-slate-950/80 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400'
+}
+
+function numericValue(value: string, fallback: number): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
 }
 
 function ingestStateLabel(state: string): string {
@@ -77,52 +117,6 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\"'\"'")}'`
 }
 
-function artifactMetadata(row: StringRow): Record<string, unknown> {
-  const raw = (row as Record<string, unknown>).metadata
-  if (!raw) {
-    return {}
-  }
-  if (typeof raw === 'object' && !Array.isArray(raw)) {
-    return raw as Record<string, unknown>
-  }
-  if (typeof raw !== 'string') {
-    return {}
-  }
-  try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}
-  } catch {
-    return {}
-  }
-}
-
-function transcriptBlocks(row: StringRow): Record<string, unknown>[] {
-  const blocks = artifactMetadata(row).blocks
-  return Array.isArray(blocks)
-    ? blocks.filter((block): block is Record<string, unknown> => Boolean(block) && typeof block === 'object' && !Array.isArray(block))
-    : []
-}
-
-function blockText(block: Record<string, unknown>, key: string, fallback = '—'): string {
-  const value = block[key]
-  if (value === null || value === undefined || value === '') {
-    return fallback
-  }
-  if (typeof value === 'boolean') {
-    return value ? 'yes' : 'no'
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => String(item)).join(', ') || fallback
-  }
-  return String(value)
-}
-
-type GroupCandidate = {
-  group: string
-  vlan: number
-  mgid: number | null
-}
-
 function voceraGroupInPool(value: string): boolean {
   const match = value.match(/^230\.230\.(\d{1,3})\.(\d{1,3})$/)
   if (!match) {
@@ -148,122 +142,600 @@ function parseGroupCandidates(text: string): GroupCandidate[] {
     const mgid = match[1] ? Number(match[1]) : null
     const key = `${match[2]}|${vlan}|${mgid ?? ''}`
     if (!seen.has(key)) {
-      candidates.push({ group: match[2], vlan, mgid })
+      candidates.push({ group: match[2], vlan, mgid, row: line.trim() })
       seen.add(key)
     }
   }
   return candidates
 }
 
-function validVlan(value: string): boolean {
-  const parsed = Number(value)
-  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 4094
-}
-
-type FormState = {
-  session_id: string
-  capture_name: string
-  wlc_name: string
-  wlc_interface: string
-  collector_host: string
-  collector_scp_username: string
-  collector_scp_port: string
-  ring_file_count: string
-  ring_file_size_mb: string
-  expected_dscp: string
-  vocera_vlan: string
-  vocera_multicast_pool: string
-  sender_mac: string
-  sender_ip: string
-  receiver_mac: string
-  receiver_ip: string
-  continuous_export_enabled: boolean
-}
-
-function formFromDefaults(defaults: MediaWlcDefaultsResponse | null): FormState {
-  const d = defaults?.defaults
-  return {
-    session_id: '',
-    capture_name: d?.capture_name ?? '',
-    wlc_name: d?.wlc_name ?? '',
-    wlc_interface: d?.wlc_interface ?? '',
-    collector_host: d?.collector_host ?? '',
-    collector_scp_username: d?.collector_scp_username ?? '',
-    collector_scp_port: String(d?.collector_scp_port ?? 22),
-    ring_file_count: String(d?.ring_file_count ?? 5),
-    ring_file_size_mb: String(d?.ring_file_size_mb ?? 100),
-    expected_dscp: String(d?.expected_dscp ?? 46),
-    vocera_vlan: String(d?.vocera_vlan ?? 684),
-    vocera_multicast_pool: d?.vocera_multicast_pool ?? '',
-    sender_mac: d?.sender?.mac ?? '',
-    sender_ip: d?.sender?.ip ?? '',
-    receiver_mac: d?.receiver?.mac ?? '',
-    receiver_ip: d?.receiver?.ip ?? '',
-    continuous_export_enabled: Boolean(d?.continuous_export_enabled)
+function commandWithGroup(text: string, attempt: StringRow | null): string {
+  if (!attempt) {
+    return text
   }
+  const group = field(attempt, 'resolved_group_ip') || field(attempt, 'dynamic_multicast_ip')
+  const vlan = field(attempt, 'resolved_group_vlan') || field(attempt, 'vocera_vlan')
+  const mgid = field(attempt, 'resolved_mgid') || field(attempt, 'mgid')
+  return text
+    .replaceAll('<VOCERA_GROUP>', group || '<VOCERA_GROUP>')
+    .replaceAll('<RESOLVED_GROUP_IP>', group || '<RESOLVED_GROUP_IP>')
+    .replaceAll('<RESOLVED_GROUP_VLAN>', vlan || '<RESOLVED_GROUP_VLAN>')
+    .replaceAll('<RESOLVED_MGID>', mgid || '<RESOLVED_MGID>')
+}
+
+async function copyText(text: string): Promise<void> {
+  if (!text) {
+    return
+  }
+  await navigator.clipboard?.writeText(text)
+}
+
+function profileRows(defaults: MediaWlcDefaultsResponse | null, form?: CreateForm): [string, string][] {
+  const d = defaults?.defaults
+  return [
+    ['WLC', d?.wlc_name ?? '—'],
+    ['Interface', form?.advanced && form.wlc_interface ? form.wlc_interface : d?.wlc_interface ?? '—'],
+    ['Collector', d?.collector_host ?? '—'],
+    ['SCP account', d?.collector_scp_username ?? '—'],
+    ['SCP port', String(d?.collector_scp_port ?? 22)],
+    ['Vocera VLAN', form?.advanced && form.vocera_vlan ? form.vocera_vlan : String(d?.vocera_vlan ?? 684)],
+    ['Multicast pool', d?.vocera_multicast_pool ?? '—'],
+    ['Expected DSCP', String(d?.expected_dscp ?? 46)],
+    [
+      'Capture buffer',
+      `${form?.advanced && form.ring_file_count ? form.ring_file_count : d?.ring_file_count ?? 5} files x ${form?.advanced && form.ring_file_size_mb ? form.ring_file_size_mb : d?.ring_file_size_mb ?? 100} MB`
+    ]
+  ]
+}
+
+function commandSheet(commandSheets: Record<string, string>, name: string, attempt: StringRow | null): string {
+  return commandWithGroup(commandSheets[name] ?? '', attempt)
+}
+
+function statusPill(label: string, tone: 'cyan' | 'emerald' | 'amber' | 'slate' | 'rose' = 'slate') {
+  const tones = {
+    cyan: 'border-cyan-500/40 bg-cyan-950/30 text-cyan-100',
+    emerald: 'border-emerald-500/40 bg-emerald-950/30 text-emerald-100',
+    amber: 'border-amber-500/40 bg-amber-950/30 text-amber-100',
+    slate: 'border-slate-700 bg-slate-950/50 text-slate-200',
+    rose: 'border-rose-500/40 bg-rose-950/30 text-rose-100'
+  }
+  return <span className={`inline-flex rounded-full border px-2 py-1 text-xs ${tones[tone]}`}>{label}</span>
+}
+
+function CommandSheetPanel({ title, text, onCopied }: { title: string; text: string; onCopied: (message: string) => void }) {
+  return (
+    <div className="rounded-md border border-slate-800 bg-slate-950/50 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-semibold text-slate-100">{title}</p>
+        <button
+          className="rounded-md border border-cyan-500/60 px-3 py-1 text-xs text-cyan-100 disabled:opacity-50"
+          disabled={!text}
+          onClick={() => {
+            void copyText(text).then(() => onCopied(`Copied ${title}.`))
+          }}
+        >
+          Copy
+        </button>
+      </div>
+      <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded border border-slate-800 bg-slate-950 p-3 text-xs text-slate-300">{text || 'Command sheet unavailable for this session.'}</pre>
+    </div>
+  )
+}
+
+function CaptureProfileCard({ defaults, form }: { defaults: MediaWlcDefaultsResponse | null; form?: CreateForm }) {
+  return (
+    <div className="rounded-md border border-slate-800 bg-slate-950/40 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Capture profile</p>
+          <p className="mt-1 text-sm font-semibold text-slate-100">SRHC Vocera Multicast Default</p>
+        </div>
+        {statusPill('Manual WLC mode', 'cyan')}
+      </div>
+      <dl className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {profileRows(defaults, form).map(([label, value]) => (
+          <div key={label}>
+            <dt className="text-xs uppercase tracking-wide text-slate-500">{label}</dt>
+            <dd className="mt-1 font-mono text-sm text-slate-200">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="mt-3 text-xs text-slate-500">{defaults?.password_policy.message ?? 'Manual mode does not collect WLC or SCP passwords.'}</p>
+    </div>
+  )
+}
+
+function SessionHistory({
+  sessions,
+  selectedSessionId,
+  onSelect
+}: {
+  sessions: StringRow[]
+  selectedSessionId: string | null
+  onSelect: (sessionId: string) => void
+}) {
+  if (!sessions.length) {
+    return (
+      <div className="rounded-md border border-slate-800 bg-slate-950/40 p-6 text-center text-sm text-slate-400">
+        No WLC capture sessions exist for this investigation.
+      </div>
+    )
+  }
+  return (
+    <div className="grid gap-3 lg:grid-cols-2">
+      {sessions.map((session) => {
+        const sessionId = field(session, 'session_id')
+        const selected = sessionId === selectedSessionId
+        return (
+          <button
+            key={sessionId}
+            className={`rounded-md border p-4 text-left transition ${selected ? 'border-cyan-500 bg-cyan-950/20' : 'border-slate-800 bg-slate-950/40 hover:border-slate-600'}`}
+            onClick={() => onSelect(sessionId)}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-mono text-sm font-semibold text-slate-100">{field(session, 'capture_name', sessionId)}</p>
+                <p className="mt-1 text-xs text-slate-500">{sessionId}</p>
+              </div>
+              {statusPill(field(session, 'session_state', 'prepared'), selected ? 'cyan' : 'slate')}
+            </div>
+            <div className="mt-3 grid gap-2 text-xs text-slate-400 sm:grid-cols-2">
+              <span>{field(session, 'sender_model', 'V5000')} {'->'} {field(session, 'receiver_model', 'C1000')}</span>
+              <span>{field(session, 'wlc_interface', 'Port-channel1')}</span>
+              <span>{field(session, 'attempt_count', '0')} attempts</span>
+              <span>{field(session, 'event_count', '0')} timeline events</span>
+            </div>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function SessionCreateWizard({
+  defaults,
+  busy,
+  onCreate,
+  onCancel
+}: {
+  defaults: MediaWlcDefaultsResponse | null
+  busy: boolean
+  onCreate: (form: CreateForm) => Promise<void>
+  onCancel: () => void
+}) {
+  const [form, setForm] = useState<CreateForm>(() => ({
+    ...EMPTY_CREATE_FORM,
+    wlc_interface: defaults?.defaults.wlc_interface ?? '',
+    ring_file_count: String(defaults?.defaults.ring_file_count ?? 5),
+    ring_file_size_mb: String(defaults?.defaults.ring_file_size_mb ?? 100),
+    vocera_vlan: String(defaults?.defaults.vocera_vlan ?? 684)
+  }))
+
+  const update = (key: keyof CreateForm, value: string | boolean) => {
+    setForm((current) => ({ ...current, [key]: value }))
+  }
+
+  return (
+    <Card>
+      <div className="space-y-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-300/80">New WLC capture session</p>
+            <h2 className="mt-1 text-xl font-semibold text-slate-50">Create prepared capture session</h2>
+          </div>
+          <button className="rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200" onClick={onCancel}>Cancel</button>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-3">
+          {([
+            ['short_validation', '90-second validation smoke'],
+            ['incident_reproduction', 'Incident reproduction'],
+            ['extended_monitored', 'Extended monitored capture']
+          ] as const).map(([value, label], index) => (
+            <label key={`${value}-${index}`} className={`rounded-md border p-3 ${form.capture_purpose === value ? 'border-cyan-500 bg-cyan-950/20' : 'border-slate-800 bg-slate-950/40'}`}>
+              <input
+                className="mr-2"
+                type="radio"
+                checked={form.capture_purpose === value}
+                onChange={() => update('capture_purpose', value)}
+              />
+              <span className="text-sm text-slate-200">{label}</span>
+            </label>
+          ))}
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="rounded-md border border-slate-800 bg-slate-950/40 p-3">
+            <p className="text-xs uppercase tracking-wide text-slate-500">Sender test device</p>
+            <p className="mt-1 font-mono text-sm text-slate-200">{defaults?.defaults.sender?.model ?? 'V5000'} {defaults?.defaults.sender?.mac ?? '—'}</p>
+          </div>
+          <div className="rounded-md border border-slate-800 bg-slate-950/40 p-3">
+            <p className="text-xs uppercase tracking-wide text-slate-500">Receiver test device</p>
+            <p className="mt-1 font-mono text-sm text-slate-200">{defaults?.defaults.receiver?.model ?? 'C1000'} {defaults?.defaults.receiver?.mac ?? '—'}</p>
+          </div>
+        </div>
+
+        <label className="block space-y-1 text-sm text-slate-300">
+          <span>Optional note</span>
+          <input className={inputClass()} value={form.notes} onChange={(event) => update('notes', event.target.value)} />
+        </label>
+
+        <CaptureProfileCard defaults={defaults} form={form} />
+
+        <details className="rounded-md border border-slate-800 bg-slate-950/40 p-3">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-200">
+            <input className="mr-2" type="checkbox" checked={form.advanced} onChange={(event) => update('advanced', event.target.checked)} />
+            Advanced overrides
+          </summary>
+          {form.advanced && (
+            <div className="mt-4 grid gap-3 md:grid-cols-4">
+              <label className="space-y-1 text-sm text-slate-300 md:col-span-4">
+                <span>Override reason</span>
+                <input className={inputClass()} value={form.override_reason} onChange={(event) => update('override_reason', event.target.value)} />
+              </label>
+              <label className="space-y-1 text-sm text-slate-300">
+                <span>Interface</span>
+                <input className={inputClass()} value={form.wlc_interface} onChange={(event) => update('wlc_interface', event.target.value)} />
+              </label>
+              <label className="space-y-1 text-sm text-slate-300">
+                <span>Ring files</span>
+                <input className={inputClass()} value={form.ring_file_count} onChange={(event) => update('ring_file_count', event.target.value)} />
+              </label>
+              <label className="space-y-1 text-sm text-slate-300">
+                <span>File MB</span>
+                <input className={inputClass()} value={form.ring_file_size_mb} onChange={(event) => update('ring_file_size_mb', event.target.value)} />
+              </label>
+              <label className="space-y-1 text-sm text-slate-300">
+                <span>Configured VLAN</span>
+                <input className={inputClass()} value={form.vocera_vlan} onChange={(event) => update('vocera_vlan', event.target.value)} />
+              </label>
+            </div>
+          )}
+        </details>
+
+        <button
+          className="rounded-md bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50"
+          disabled={busy || (form.advanced && !form.override_reason.trim())}
+          onClick={() => { void onCreate(form) }}
+        >
+          Create prepared capture session
+        </button>
+      </div>
+    </Card>
+  )
+}
+
+function ArtifactStatusPanel({ artifacts, onRefresh, busy }: { artifacts: StringRow[]; onRefresh: () => void; busy: boolean }) {
+  return (
+    <div className="rounded-md border border-slate-800 bg-slate-950/40 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">EPC artifact</p>
+          <p className="mt-1 text-sm text-slate-300">Collector status for the selected session only.</p>
+        </div>
+        <button className="rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 disabled:opacity-50" disabled={busy} onClick={onRefresh}>Refresh ingest status</button>
+      </div>
+      <div className="mt-4 overflow-auto rounded-md border border-slate-800">
+        <table className="min-w-full divide-y divide-slate-800 text-sm">
+          <thead className="bg-slate-950/60 text-left text-xs uppercase tracking-wide text-slate-400">
+            <tr>
+              <th className="px-3 py-2">File</th>
+              <th className="px-3 py-2">Size</th>
+              <th className="px-3 py-2">SHA-256</th>
+              <th className="px-3 py-2">State</th>
+              <th className="px-3 py-2">Parser</th>
+              <th className="px-3 py-2">Visibility</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-800">
+            {artifacts.map((artifact) => (
+              <tr key={field(artifact, 'artifact_id')} className="text-slate-200">
+                <td className="px-3 py-2 font-mono text-xs">{field(artifact, 'source_name', '—')}</td>
+                <td className="px-3 py-2">{formatBytes(field(artifact, 'size_bytes'))}</td>
+                <td className="px-3 py-2 font-mono text-xs">{shortSha(field(artifact, 'sha256'))}</td>
+                <td className="px-3 py-2">{ingestStateLabel(field(artifact, 'ingest_state'))}</td>
+                <td className="px-3 py-2">{field(artifact, 'parser_status', '—')}</td>
+                <td className="px-3 py-2">{field(artifact, 'visibility_class', 'pending')}</td>
+              </tr>
+            ))}
+            {!artifacts.length && (
+              <tr>
+                <td className="px-3 py-6 text-center text-slate-500" colSpan={6}>Waiting for WLC export into this session package.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function GroupSelectionPanel({
+  attempt,
+  configuredVlan,
+  busy,
+  onSelect,
+  onMessage
+}: {
+  attempt: StringRow | null
+  configuredVlan: number
+  busy: boolean
+  onSelect: (candidate: GroupCandidate, overrideReason: string, raw: string) => Promise<void>
+  onMessage: (message: string) => void
+}) {
+  const [text, setText] = useState('')
+  const [candidates, setCandidates] = useState<GroupCandidate[]>([])
+  const [overrideReason, setOverrideReason] = useState('')
+
+  return (
+    <div className="space-y-3">
+      <label className="block space-y-1 text-sm text-slate-300">
+        <span>Group summary output</span>
+        <textarea
+          className="min-h-24 w-full rounded-md border border-slate-700 bg-slate-950/80 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400"
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          placeholder="Paste show wireless multicast group summary output"
+        />
+      </label>
+      <button
+        className="rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 disabled:opacity-50"
+        disabled={!text.trim()}
+        onClick={() => {
+          const parsed = parseGroupCandidates(text)
+          setCandidates(parsed)
+          onMessage(parsed.length ? `Found ${parsed.length} candidate group${parsed.length === 1 ? '' : 's'}.` : 'No 230.230.x.x candidate group rows found.')
+        }}
+      >
+        Find candidate groups
+      </button>
+      {candidates.length > 0 && (
+        <div className="overflow-auto rounded-md border border-slate-800">
+          <table className="min-w-full divide-y divide-slate-800 text-sm">
+            <thead className="bg-slate-950/60 text-left text-xs uppercase tracking-wide text-slate-400">
+              <tr>
+                <th className="px-3 py-2">Dynamic group</th>
+                <th className="px-3 py-2">VLAN</th>
+                <th className="px-3 py-2">MGID</th>
+                <th className="px-3 py-2">Select</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800">
+              {candidates.map((candidate) => {
+                const mismatch = candidate.vlan !== configuredVlan
+                return (
+                  <tr key={`${candidate.group}-${candidate.vlan}-${candidate.mgid ?? 'none'}`} className="text-slate-200">
+                    <td className="px-3 py-2 font-mono text-xs">{candidate.group}</td>
+                    <td className="px-3 py-2">{candidate.vlan}{mismatch ? ' differs from configured' : ''}</td>
+                    <td className="px-3 py-2">{candidate.mgid ?? 'unknown'}</td>
+                    <td className="px-3 py-2">
+                      <button
+                        className="rounded-md border border-cyan-500/60 px-3 py-1 text-xs text-cyan-100 disabled:opacity-50"
+                        disabled={busy || !attempt || (mismatch && !overrideReason.trim())}
+                        onClick={() => { void onSelect(candidate, overrideReason, text) }}
+                      >
+                        Select
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {candidates.some((candidate) => candidate.vlan !== configuredVlan) && (
+        <label className="block space-y-1 text-sm text-slate-300">
+          <span>Override active-group VLAN reason</span>
+          <input className={inputClass()} value={overrideReason} onChange={(event) => setOverrideReason(event.target.value)} />
+        </label>
+      )}
+      {!attempt && <p className="text-xs text-amber-200">Start a broadcast attempt before selecting a multicast group.</p>}
+    </div>
+  )
+}
+
+function OperatorConsole({
+  detail,
+  defaults,
+  busy,
+  consoleUser,
+  setConsoleUser,
+  onPatchState,
+  onStartAttempt,
+  onSetOutcome,
+  onSelectGroup,
+  onRefresh,
+  onMessage
+}: {
+  detail: MediaWlcSessionDetailResponse
+  defaults: MediaWlcDefaultsResponse | null
+  busy: boolean
+  consoleUser: string
+  setConsoleUser: (value: string) => void
+  onPatchState: (state: 'running' | 'stopped' | 'exported' | 'aborted') => Promise<void>
+  onStartAttempt: () => Promise<void>
+  onSetOutcome: (outcome: 'heard' | 'missed' | 'partial' | 'choppy' | 'alert_only') => Promise<void>
+  onSelectGroup: (candidate: GroupCandidate, overrideReason: string, raw: string) => Promise<void>
+  onRefresh: () => void
+  onMessage: (message: string) => void
+}) {
+  const session = detail.session
+  const attempts = detail.attempts ?? []
+  const activeAttempt = attempts.find((attempt) => field(attempt, 'attempt_id') === detail.open_attempt_id)
+    ?? attempts.find((attempt) => field(attempt, 'attempt_id') === detail.selected_attempt_id)
+    ?? attempts[0]
+    ?? null
+  const configuredVlan = numericValue(field(session, 'configured_vocera_vlan'), defaults?.defaults.vocera_vlan ?? 684)
+  const commandSheets = detail.command_sheets ?? {}
+  const consoleCommand = field(session, 'command_package_path') && field(session, 'wlc_name')
+    ? [
+        'make vocera-media-qoe-wlc-session-console \\',
+        `  SESSION_DIR=${shellQuote(field(session, 'command_package_path'))} \\`,
+        `  WLC_SSH_HOST=${shellQuote(field(session, 'wlc_name'))} \\`,
+        `  WLC_SSH_USER=${consoleUser.trim() ? shellQuote(consoleUser.trim()) : '<your-wlc-user>'}`
+      ].join('\n')
+    : ''
+  const startSheet = field(session, 'capture_mode') === 'long_reproduction' ? 'start-long.cli' : 'start-short-validation.cli'
+
+  return (
+    <div className="space-y-5">
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-300/80">Selected session</p>
+            <h2 className="mt-1 font-mono text-xl font-semibold text-slate-50">{field(session, 'capture_name', field(session, 'session_id'))}</h2>
+            <p className="mt-1 text-sm text-slate-400">{field(session, 'session_id')}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {statusPill(field(session, 'session_state', 'prepared'), 'cyan')}
+            {statusPill(field(session, 'capture_mode', 'short_validation'), 'slate')}
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-4">
+          <div><p className="text-xs uppercase text-slate-500">Sender</p><p className="font-mono text-sm text-slate-200">{field(session, 'sender_mac')}</p></div>
+          <div><p className="text-xs uppercase text-slate-500">Receiver</p><p className="font-mono text-sm text-slate-200">{field(session, 'receiver_mac')}</p></div>
+          <div><p className="text-xs uppercase text-slate-500">Interface</p><p className="font-mono text-sm text-slate-200">{field(session, 'wlc_interface')}</p></div>
+          <div><p className="text-xs uppercase text-slate-500">Next action</p><p className="text-sm text-slate-200">{detailField(detail.next_operator_action, 'label', 'Review session')}</p></div>
+        </div>
+      </Card>
+
+      <div className="grid gap-4">
+        <Card>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Step 1</p>
+          <h3 className="mt-1 text-lg font-semibold text-slate-50">Prepare WLC</h3>
+          <div className="mt-3 grid gap-3 lg:grid-cols-[18rem_1fr]">
+            <label className="space-y-1 text-sm text-slate-300">
+              <span>WLC SSH user</span>
+              <input className={inputClass()} value={consoleUser} onChange={(event) => setConsoleUser(event.target.value)} placeholder="operator username" />
+            </label>
+            <CommandSheetPanel title="Logged WLC console command" text={consoleCommand} onCopied={onMessage} />
+          </div>
+          <div className="mt-3">
+            <CommandSheetPanel title="baseline.cli" text={commandSheet(commandSheets, 'baseline.cli', activeAttempt)} onCopied={onMessage} />
+          </div>
+          <button className="mt-3 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 disabled:opacity-50" disabled={busy} onClick={() => { void createMediaQoeWlcSessionEvent(field(session, 'session_id'), { event_kind: 'note', event_time: nowIso(), notes: 'Baseline WLC output recorded.' }).then(onRefresh) }}>
+            I recorded baseline output
+          </button>
+        </Card>
+
+        <Card>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Step 2</p>
+          <h3 className="mt-1 text-lg font-semibold text-slate-50">Start capture</h3>
+          <CommandSheetPanel title={startSheet} text={commandSheet(commandSheets, startSheet, activeAttempt)} onCopied={onMessage} />
+          <button className="mt-3 rounded-md border border-emerald-500/60 px-3 py-2 text-sm text-emerald-100 disabled:opacity-50" disabled={busy} onClick={() => { void onPatchState('running') }}>
+            I started the WLC capture
+          </button>
+        </Card>
+
+        <Card>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Step 3</p>
+          <h3 className="mt-1 text-lg font-semibold text-slate-50">Record broadcast outcome</h3>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button className="rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 disabled:opacity-50" disabled={busy} onClick={() => { void onStartAttempt() }}>
+              Start broadcast attempt
+            </button>
+            {(['heard', 'missed', 'partial', 'choppy', 'alert_only'] as const).map((outcome) => (
+              <button key={outcome} className="rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 disabled:opacity-50" disabled={busy} onClick={() => { void onSetOutcome(outcome) }}>
+                {outcome === 'heard' ? 'Heard clearly' : outcome.replaceAll('_', ' ')}
+              </button>
+            ))}
+          </div>
+          <p className="mt-3 text-xs text-slate-500">Active attempt: <span className="font-mono text-slate-300">{field(activeAttempt, 'attempt_id', 'none')}</span></p>
+        </Card>
+
+        <Card>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Step 4</p>
+          <h3 className="mt-1 text-lg font-semibold text-slate-50">Select active multicast group</h3>
+          <div className="mt-3">
+            <CommandSheetPanel title="active-event.cli" text={commandSheet(commandSheets, 'active-event.cli', activeAttempt)} onCopied={onMessage} />
+          </div>
+          <div className="mt-3">
+            <GroupSelectionPanel attempt={activeAttempt} configuredVlan={configuredVlan} busy={busy} onSelect={onSelectGroup} onMessage={onMessage} />
+          </div>
+          {activeAttempt && (field(activeAttempt, 'resolved_group_ip') || field(activeAttempt, 'dynamic_multicast_ip')) && (
+            <div className="mt-3 rounded-md border border-emerald-900 bg-emerald-950/20 p-3 text-sm text-emerald-100">
+              Selected: <span className="font-mono">{field(activeAttempt, 'resolved_group_ip') || field(activeAttempt, 'dynamic_multicast_ip')}</span> VLAN {field(activeAttempt, 'resolved_group_vlan') || field(activeAttempt, 'vocera_vlan', '—')} MGID {field(activeAttempt, 'resolved_mgid', '—')}
+            </div>
+          )}
+          <div className="mt-3">
+            <CommandSheetPanel title="resolved-active-group.cli" text={commandSheet(commandSheets, 'resolved-active-group.cli', activeAttempt)} onCopied={onMessage} />
+          </div>
+        </Card>
+
+        <Card>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Step 5</p>
+          <h3 className="mt-1 text-lg font-semibold text-slate-50">Stop, export, and ingest</h3>
+          <CommandSheetPanel title="stop-export.cli" text={commandSheet(commandSheets, 'stop-export.cli', activeAttempt)} onCopied={onMessage} />
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button className="rounded-md border border-amber-500/60 px-3 py-2 text-sm text-amber-100 disabled:opacity-50" disabled={busy} onClick={() => { void onPatchState('stopped') }}>
+              I stopped the WLC capture
+            </button>
+            <button className="rounded-md border border-emerald-500/60 px-3 py-2 text-sm text-emerald-100 disabled:opacity-50" disabled={busy} onClick={() => { void onPatchState('exported') }}>
+              I confirmed SCP export succeeded
+            </button>
+            <button className="rounded-md border border-rose-500/60 px-3 py-2 text-sm text-rose-100 disabled:opacity-50" disabled={busy} onClick={() => { void onPatchState('aborted') }}>
+              I aborted this capture
+            </button>
+          </div>
+          <p className="mt-3 text-xs text-amber-200">Do not run cleanup until the WLC confirms that SCP export completed.</p>
+          <div className="mt-3">
+            <ArtifactStatusPanel artifacts={detail.artifacts ?? []} onRefresh={onRefresh} busy={busy} />
+          </div>
+          <div className="mt-3">
+            <CommandSheetPanel title="cleanup.cli" text={commandSheet(commandSheets, 'cleanup.cli', activeAttempt)} onCopied={onMessage} />
+          </div>
+          <button className="mt-3 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 disabled:opacity-50" disabled={busy} onClick={() => { void createMediaQoeWlcSessionEvent(field(session, 'session_id'), { event_kind: 'note', event_time: nowIso(), notes: 'WLC cleanup completed.' }).then(onRefresh) }}>
+            I completed WLC cleanup
+          </button>
+        </Card>
+      </div>
+    </div>
+  )
 }
 
 export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null }) {
   const [defaults, setDefaults] = useState<MediaWlcDefaultsResponse | null>(null)
-  const [form, setForm] = useState<FormState>(() => formFromDefaults(null))
   const [sessions, setSessions] = useState<StringRow[]>([])
-  const [attempts, setAttempts] = useState<StringRow[]>([])
-  const [artifacts, setArtifacts] = useState<StringRow[]>([])
-  const [currentAttemptId, setCurrentAttemptId] = useState<string | null>(null)
-  const [commandSheets, setCommandSheets] = useState<Record<string, string>>({})
-  const [groupSummaryText, setGroupSummaryText] = useState('')
-  const [groupCandidates, setGroupCandidates] = useState<GroupCandidate[]>([])
-  const [activeGroup, setActiveGroup] = useState('')
-  const [activeGroupVlan, setActiveGroupVlan] = useState('')
-  const [activeGroupMgid, setActiveGroupMgid] = useState('')
-  const [overrideReason, setOverrideReason] = useState('')
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() => new URLSearchParams(window.location.search).get('session'))
+  const [detail, setDetail] = useState<MediaWlcSessionDetailResponse | null>(null)
+  const [showCreate, setShowCreate] = useState(false)
   const [consoleUser, setConsoleUser] = useState('')
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
 
-  const latestRunningSession = useMemo(
-    () => sessions.find((session) => field(session, 'session_state') === 'running') ?? sessions[0],
-    [sessions]
+  const selectedSession = useMemo(
+    () => sessions.find((session) => field(session, 'session_id') === selectedSessionId) ?? null,
+    [selectedSessionId, sessions]
   )
 
-  const loggedConsoleCommand = useMemo(() => {
-    const sessionDir = field(latestRunningSession, 'command_package_path')
-    const wlcHost = field(latestRunningSession, 'wlc_name')
-    if (!sessionDir || !wlcHost) {
-      return ''
+  const updateUrlSession = (sessionId: string | null) => {
+    const url = new URL(window.location.href)
+    if (sessionId) {
+      url.searchParams.set('session', sessionId)
+    } else {
+      url.searchParams.delete('session')
     }
-    const user = consoleUser.trim() || '<your-wlc-user>'
-    return [
-      'make vocera-media-qoe-wlc-session-console \\',
-      `  SESSION_DIR=${shellQuote(sessionDir)} \\`,
-      `  WLC_SSH_HOST=${shellQuote(wlcHost)} \\`,
-      `  WLC_SSH_USER=${user.includes('<') ? user : shellQuote(user)}`
-    ].join('\n')
-  }, [consoleUser, latestRunningSession])
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+  }
 
-  const displayedCommandSheets = useMemo(() => {
-    if (!activeGroup) {
-      return commandSheets
+  const loadDetail = async (sessionId: string | null) => {
+    if (!sessionId) {
+      setDetail(null)
+      return
     }
-    return Object.fromEntries(
-      Object.entries(commandSheets).map(([name, text]) => [
-        name,
-        text
-          .replaceAll('<VOCERA_GROUP>', activeGroup)
-          .replaceAll('<RESOLVED_GROUP_IP>', activeGroup)
-          .replaceAll('<RESOLVED_GROUP_VLAN>', activeGroupVlan || '<RESOLVED_GROUP_VLAN>')
-          .replaceAll('<RESOLVED_MGID>', activeGroupMgid || '<RESOLVED_MGID>')
-      ])
-    )
-  }, [activeGroup, activeGroupMgid, activeGroupVlan, commandSheets])
+    const response = await getMediaQoeWlcSession(sessionId)
+    setDetail(response)
+  }
 
-  const refresh = async () => {
+  const refresh = async (preferredSessionId = selectedSessionId) => {
     if (!studyId) {
       setSessions([])
-      setAttempts([])
-      setCurrentAttemptId(null)
+      setSelectedSessionId(null)
+      setDetail(null)
       return
     }
     setLoading(true)
@@ -274,31 +746,13 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
         listStudyMediaQoeWlcSessions(studyId)
       ])
       setDefaults(defaultsResponse)
-      const sessionRows = sessionsResponse.sessions ?? []
-      setSessions(sessionRows)
-      setForm((current) => (current.wlc_name ? current : formFromDefaults(defaultsResponse)))
-      const targetSessionId = field(
-        sessionRows.find((session) => field(session, 'session_state') === 'running') ?? sessionRows[0],
-        'session_id'
-      )
-      if (targetSessionId) {
-        const attemptResponse = await listMediaQoeWlcSessionAttempts(targetSessionId)
-        const attemptRows = attemptResponse.attempts ?? []
-        setAttempts(attemptRows)
-        // Bind active-group resolution to the open attempt, falling back to the
-        // most recent attempt so a refresh or operator handoff stays consistent.
-        setCurrentAttemptId(attemptResponse.open_attempt_id ?? field(attemptRows[0], 'attempt_id') ?? null)
-        try {
-          const artifactResponse = await listMediaQoeWlcSessionArtifacts(targetSessionId)
-          setArtifacts(artifactResponse.artifacts ?? [])
-        } catch {
-          setArtifacts([])
-        }
-      } else {
-        setAttempts([])
-        setCurrentAttemptId(null)
-        setArtifacts([])
-      }
+      const rows = sessionsResponse.sessions ?? []
+      setSessions(rows)
+      const validPreferred = preferredSessionId && rows.some((session) => field(session, 'session_id') === preferredSessionId)
+      const nextSelected = validPreferred ? preferredSessionId : rows.length === 1 ? field(rows[0], 'session_id') : null
+      setSelectedSessionId(nextSelected)
+      updateUrlSession(nextSelected)
+      await loadDetail(nextSelected)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load WLC capture sessions')
     } finally {
@@ -310,97 +764,47 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
     void refresh()
   }, [studyId])
 
-  const updateForm = (key: keyof FormState, value: string | boolean) => {
-    setForm((current) => ({ ...current, [key]: value }))
-  }
-
-  const setActiveGroupFromSummary = () => {
-    const candidates = parseGroupCandidates(groupSummaryText)
-    setGroupCandidates(candidates)
-    if (!candidates.length) {
-      setError('No candidate 230.230.0.0/20 Vocera group rows were found in the pasted summary.')
-      return
-    }
+  const selectSession = async (sessionId: string) => {
+    setSelectedSessionId(sessionId)
+    updateUrlSession(sessionId)
     setError(null)
-    setMessage(`Found ${candidates.length} active group candidate${candidates.length === 1 ? '' : 's'}. Select the row that matches the broadcast.`)
-  }
-
-  const selectActiveGroupCandidate = async (candidate: GroupCandidate) => {
-    const configuredVlan = numericValue(form.vocera_vlan, 684)
-    const mismatch = candidate.vlan !== configuredVlan
-    if (mismatch && !overrideReason.trim()) {
-      setError('Enter an override reason before selecting a group on a VLAN different from the configured default.')
-      return
-    }
-    // A dynamic Vocera group is assigned per broadcast, so the selection binds to
-    // a specific attempt, not the capture session.
-    if (!currentAttemptId) {
-      setError('Mark a broadcast (Broadcast Started or an outcome) first so the active group attaches to that attempt.')
-      return
-    }
-    setActiveGroup(candidate.group)
-    setActiveGroupVlan(String(candidate.vlan))
-    setActiveGroupMgid(candidate.mgid === null ? '' : String(candidate.mgid))
-    setBusy(true)
-    setError(null)
+    setMessage(null)
     try {
-      await setMediaQoeWlcAttemptActiveGroup(currentAttemptId, {
-        group_ip: candidate.group,
-        group_vlan: candidate.vlan,
-        mgid: candidate.mgid ?? undefined,
-        selection_source: mismatch ? 'operator_override' : 'observed_confirmation',
-        vlan_override_reason: mismatch ? overrideReason.trim() : undefined,
-        group_summary_raw: groupSummaryText.trim() || undefined,
-        selected_at: nowIso()
-      })
-      await refresh()
-      setMessage(
-        `Selected active group ${candidate.group} on VLAN ${candidate.vlan}` +
-          `${candidate.mgid === null ? '' : `, MGID ${candidate.mgid}`} for attempt ${currentAttemptId}.`
-      )
+      setLoading(true)
+      await loadDetail(sessionId)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to store active group selection')
+      setError(err instanceof Error ? err.message : 'Failed to open WLC capture session')
     } finally {
-      setBusy(false)
+      setLoading(false)
     }
   }
 
-  const createSession = async () => {
+  const createSession = async (form: CreateForm) => {
     if (!studyId) {
-      setError('Select a multicast investigation study before creating a WLC session.')
-      return
-    }
-    if (!validVlan(form.vocera_vlan)) {
-      setError('Configured Vocera multicast VLAN is required and must be an integer from 1 to 4094.')
+      setError('Select or create a multicast investigation before creating a WLC session.')
       return
     }
     const payload: MediaWlcSessionCreateRequest = {
-      session_id: form.session_id.trim() || undefined,
-      capture_name: form.capture_name.trim() || undefined,
-      wlc_name: form.wlc_name.trim() || undefined,
-      wlc_interface: form.wlc_interface.trim() || undefined,
-      collector_host: form.collector_host.trim() || undefined,
-      collector_scp_username: form.collector_scp_username.trim() || undefined,
-      collector_scp_port: numericValue(form.collector_scp_port, 22),
-      ring_file_count: numericValue(form.ring_file_count, 5),
-      ring_file_size_mb: numericValue(form.ring_file_size_mb, 100),
-      expected_dscp: numericValue(form.expected_dscp, 46),
-      vocera_vlan: numericValue(form.vocera_vlan, 684),
-      vocera_multicast_pool: form.vocera_multicast_pool.trim() || undefined,
-      sender_mac: form.sender_mac.trim() || undefined,
-      sender_ip: form.sender_ip.trim() || undefined,
-      receiver_mac: form.receiver_mac.trim() || undefined,
-      receiver_ip: form.receiver_ip.trim() || undefined,
-      continuous_export_enabled: form.continuous_export_enabled
+      capture_mode: form.capture_purpose === 'short_validation' ? 'short_validation' : 'long_reproduction',
+      notes: form.advanced
+        ? `${form.notes.trim() ? `${form.notes.trim()}\n\n` : ''}Capture purpose: ${form.capture_purpose.replaceAll('_', ' ')}.\nAdvanced override reason: ${form.override_reason.trim()}`
+        : `${form.notes.trim() ? `${form.notes.trim()}\n\n` : ''}Capture purpose: ${form.capture_purpose.replaceAll('_', ' ')}.`.trim()
+    }
+    if (form.advanced) {
+      payload.wlc_interface = form.wlc_interface.trim() || undefined
+      payload.ring_file_count = numericValue(form.ring_file_count, defaults?.defaults.ring_file_count ?? 5)
+      payload.ring_file_size_mb = numericValue(form.ring_file_size_mb, defaults?.defaults.ring_file_size_mb ?? 100)
+      payload.vocera_vlan = numericValue(form.vocera_vlan, defaults?.defaults.vocera_vlan ?? 684)
     }
     setBusy(true)
     setError(null)
     setMessage(null)
     try {
       const response = await createStudyMediaQoeWlcSession(studyId, payload)
-      setCommandSheets(response.command_sheets ?? {})
+      const sessionId = field(response.session, 'session_id')
+      setShowCreate(false)
       setMessage(response.message ?? 'Created WLC capture session.')
-      await refresh()
+      await refresh(sessionId)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create WLC capture session')
     } finally {
@@ -408,20 +812,21 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
     }
   }
 
-  const patchSession = async (session: StringRow, state: 'running' | 'stopped' | 'exported' | 'aborted') => {
-    const sessionId = field(session, 'session_id')
-    if (!sessionId) {
+  const patchSelectedState = async (state: 'running' | 'stopped' | 'exported' | 'aborted') => {
+    if (!selectedSessionId) {
+      setError('Open a WLC session before recording capture state.')
       return
     }
     setBusy(true)
     setError(null)
     try {
-      await updateMediaQoeWlcSession(sessionId, {
+      await updateMediaQoeWlcSession(selectedSessionId, {
         session_state: state,
         capture_started_at: state === 'running' ? nowIso() : undefined,
         capture_stopped_at: state === 'stopped' || state === 'exported' || state === 'aborted' ? nowIso() : undefined
       })
-      await refresh()
+      setMessage(`Recorded session state: ${state}.`)
+      await refresh(selectedSessionId)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update WLC session')
     } finally {
@@ -429,422 +834,139 @@ export function MediaWlcCaptureSessions({ studyId }: { studyId: string | null })
     }
   }
 
-  const markEvent = async (session: StringRow | undefined, eventKind: 'broadcast_started' | 'heard' | 'missed' | 'partial' | 'choppy' | 'alert_only' | 'session_end') => {
-    const sessionId = field(session, 'session_id')
-    if (!sessionId) {
-      setError('Create or select a Vocera multicast capture session before marking an event.')
+  const startAttempt = async () => {
+    if (!selectedSessionId) {
+      setError('Open a WLC session before starting an attempt.')
       return
     }
     setBusy(true)
     setError(null)
     try {
-      const response = await createMediaQoeWlcSessionEvent(sessionId, {
-        event_kind: eventKind,
-        event_time: nowIso(),
-        browser_event_time: nowIso()
-      })
-      if (response.attempt_id) {
-        setCurrentAttemptId(response.attempt_id)
-      }
-      setMessage(response.attempt_id ? `Marked ${eventKind}: ${response.attempt_id}` : `Marked ${eventKind}.`)
-      await refresh()
+      const response = await startMediaQoeWlcAttempt(selectedSessionId, { started_at: nowIso(), browser_event_time: nowIso() })
+      setMessage(`Started attempt ${field(response.attempt, 'attempt_id')}.`)
+      await refresh(selectedSessionId)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to mark WLC session event')
+      setError(err instanceof Error ? err.message : 'Failed to start broadcast attempt')
     } finally {
       setBusy(false)
     }
   }
 
-  const refreshArtifactStatus = async () => {
+  const setOutcome = async (outcome: 'heard' | 'missed' | 'partial' | 'choppy' | 'alert_only') => {
+    if (!selectedSessionId) {
+      setError('Open a WLC session before recording an outcome.')
+      return
+    }
     setBusy(true)
     setError(null)
     try {
-      await refresh()
-      setMessage('Refreshed session EPC artifact status.')
+      let attemptId = detail?.open_attempt_id || ''
+      if (!attemptId) {
+        const started = await startMediaQoeWlcAttempt(selectedSessionId, { started_at: nowIso(), browser_event_time: nowIso() })
+        attemptId = field(started.attempt, 'attempt_id')
+      }
+      await setMediaQoeWlcAttemptOutcome(attemptId, {
+        audio_result: outcome,
+        alert_received: outcome === 'alert_only' ? true : undefined,
+        audio_received: outcome === 'heard' ? true : outcome === 'alert_only' || outcome === 'missed' ? false : undefined,
+        ended_at: nowIso(),
+        browser_event_time: nowIso()
+      })
+      setMessage(`Recorded outcome ${outcome.replaceAll('_', ' ')} for ${attemptId}.`)
+      await refresh(selectedSessionId)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to refresh artifact status')
+      setError(err instanceof Error ? err.message : 'Failed to record broadcast outcome')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const selectGroup = async (candidate: GroupCandidate, overrideReason: string, raw: string) => {
+    const attempt = detail?.attempts.find((row) => field(row, 'attempt_id') === detail.open_attempt_id)
+      ?? detail?.attempts.find((row) => field(row, 'attempt_id') === detail.selected_attempt_id)
+      ?? null
+    if (!attempt) {
+      setError('Start a broadcast attempt before selecting an active group.')
+      return
+    }
+    const configuredVlan = numericValue(field(detail?.session, 'configured_vocera_vlan'), defaults?.defaults.vocera_vlan ?? 684)
+    const mismatch = candidate.vlan !== configuredVlan
+    if (mismatch && !overrideReason.trim()) {
+      setError('Enter an override reason before selecting a group on a VLAN different from the configured default.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      await setMediaQoeWlcAttemptActiveGroup(field(attempt, 'attempt_id'), {
+        group_ip: candidate.group,
+        group_vlan: candidate.vlan,
+        mgid: candidate.mgid ?? undefined,
+        selection_source: mismatch ? 'operator_override' : 'observed_confirmation',
+        vlan_override_reason: mismatch ? overrideReason.trim() : undefined,
+        group_summary_raw: raw.trim() || undefined,
+        selected_row: candidate.row,
+        selected_at: nowIso()
+      })
+      setMessage(`Selected ${candidate.group} VLAN ${candidate.vlan}${candidate.mgid === null ? '' : ` MGID ${candidate.mgid}`}.`)
+      await refresh(selectedSessionId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to store active group selection')
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <CollapsibleCard title="Vocera Multicast Capture Sessions" eyebrow="Manual WLC EPC workflow" defaultOpen={true}>
-      <div className="space-y-5">
-        <div className="grid gap-3 md:grid-cols-4">
-          <label className="space-y-1 text-sm text-slate-300">
-            <span>Session ID</span>
-            <input className={textInputClass()} value={form.session_id} onChange={(event) => updateForm('session_id', event.target.value)} placeholder="auto" />
-          </label>
-          <label className="space-y-1 text-sm text-slate-300">
-            <span>Capture Name</span>
-            <input className={textInputClass()} value={form.capture_name} onChange={(event) => updateForm('capture_name', event.target.value)} />
-          </label>
-          <label className="space-y-1 text-sm text-slate-300">
-            <span>WLC</span>
-            <input className={textInputClass()} value={form.wlc_name} onChange={(event) => updateForm('wlc_name', event.target.value)} />
-          </label>
-          <label className="space-y-1 text-sm text-slate-300">
-            <span>Interface</span>
-            <input className={textInputClass()} value={form.wlc_interface} onChange={(event) => updateForm('wlc_interface', event.target.value)} />
-          </label>
-          <label className="space-y-1 text-sm text-slate-300">
-            <span>Collector Host</span>
-            <input className={textInputClass()} value={form.collector_host} onChange={(event) => updateForm('collector_host', event.target.value)} />
-          </label>
-          <label className="space-y-1 text-sm text-slate-300">
-            <span>SCP Username</span>
-            <input className={textInputClass()} value={form.collector_scp_username} onChange={(event) => updateForm('collector_scp_username', event.target.value)} />
-          </label>
-          <label className="space-y-1 text-sm text-slate-300">
-            <span>Ring Files</span>
-            <input className={textInputClass()} value={form.ring_file_count} onChange={(event) => updateForm('ring_file_count', event.target.value)} />
-          </label>
-          <label className="space-y-1 text-sm text-slate-300">
-            <span>File MB</span>
-            <input className={textInputClass()} value={form.ring_file_size_mb} onChange={(event) => updateForm('ring_file_size_mb', event.target.value)} />
-          </label>
-          <label className="space-y-1 text-sm text-slate-300">
-            <span>Vocera Pool</span>
-            <input className={textInputClass()} value={form.vocera_multicast_pool} onChange={(event) => updateForm('vocera_multicast_pool', event.target.value)} />
-          </label>
-          <label className="space-y-1 text-sm text-slate-300 md:col-span-2">
-            <span>Configured Vocera multicast VLAN</span>
-            <input className={textInputClass()} value={form.vocera_vlan} onChange={(event) => updateForm('vocera_vlan', event.target.value)} />
-            <span className="block text-xs text-slate-500">
-              Used to generate WLC multicast-group, IGMP, MGID, and source queries. Badge client VLAN observations do not automatically change this value.
-            </span>
-          </label>
-          <label className="space-y-1 text-sm text-slate-300">
-            <span>Sender MAC</span>
-            <input className={textInputClass()} value={form.sender_mac} onChange={(event) => updateForm('sender_mac', event.target.value)} />
-          </label>
-          <label className="space-y-1 text-sm text-slate-300">
-            <span>Receiver MAC</span>
-            <input className={textInputClass()} value={form.receiver_mac} onChange={(event) => updateForm('receiver_mac', event.target.value)} />
-          </label>
-          <label className="flex items-center gap-2 pt-7 text-sm text-slate-300">
-            <input type="checkbox" checked={form.continuous_export_enabled} onChange={(event) => updateForm('continuous_export_enabled', event.target.checked)} />
-            Continuous export
-          </label>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50" disabled={!studyId || busy} onClick={() => { void createSession() }}>
-            Create Session
-          </button>
-          <button className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 disabled:opacity-50" disabled={!studyId || loading} onClick={() => { void refresh() }}>
-            Refresh
-          </button>
-          {latestRunningSession && (
-            <>
-              <button className="rounded-lg border border-emerald-500/60 px-3 py-2 text-sm text-emerald-100 disabled:opacity-50" disabled={busy} onClick={() => { void patchSession(latestRunningSession, 'running') }}>
-                Mark Running
-              </button>
-              <button className="rounded-lg border border-amber-500/60 px-3 py-2 text-sm text-amber-100 disabled:opacity-50" disabled={busy} onClick={() => { void patchSession(latestRunningSession, 'stopped') }}>
-                Mark Stopped
-              </button>
-            </>
-          )}
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          {(['broadcast_started', 'heard', 'missed', 'partial', 'choppy', 'alert_only', 'session_end'] as const).map((eventKind) => (
-            <button key={eventKind} className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 disabled:opacity-50" disabled={busy || !latestRunningSession} onClick={() => { void markEvent(latestRunningSession, eventKind) }}>
-              {eventKind.replaceAll('_', ' ')}
-            </button>
-          ))}
-        </div>
-
-        <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-sm text-slate-300">
-          {defaults?.password_policy.message ?? 'Manual mode does not collect WLC or SCP secrets.'}
-        </div>
-
-        <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-sm text-slate-300">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Observed VLAN context</p>
-          <div className="mt-2 grid gap-2 md:grid-cols-5">
-            <span>Sender client VLAN: unknown until imported</span>
-            <span>Sender multicast VLAN: unknown until imported</span>
-            <span>Receiver client VLAN: unknown until imported</span>
-            <span>Receiver multicast VLAN: unknown until imported</span>
-            <span>Active group VLAN: {activeGroupVlan || 'unknown until selected'}</span>
+    <div className="space-y-5">
+      <Card>
+        <div className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-center">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Investigation sessions</p>
+            <h2 className="mt-1 text-xl font-semibold text-slate-50">WLC capture sessions</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Open a session before recording WLC state, broadcast attempts, active groups, or artifact status.
+            </p>
           </div>
-        </div>
-
-        <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
-          <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
-            <label className="space-y-1 text-sm text-slate-300">
-              <span>Group summary paste</span>
-              <textarea
-                className="min-h-24 w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400"
-                value={groupSummaryText}
-                onChange={(event) => setGroupSummaryText(event.target.value)}
-                placeholder="Paste show wireless multicast group summary output"
-              />
-            </label>
-            <button className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 disabled:opacity-50" disabled={busy || !groupSummaryText.trim()} onClick={setActiveGroupFromSummary}>
-              Find Active Group Candidates
+          <div className="flex flex-wrap gap-2">
+            <button className="rounded-md bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50" disabled={!studyId || busy} onClick={() => setShowCreate(true)}>
+              New WLC capture session
+            </button>
+            <button className="rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 disabled:opacity-50" disabled={loading} onClick={() => { void refresh() }}>
+              Refresh
             </button>
           </div>
-          {groupCandidates.length > 0 && (
-            <div className="mt-3 overflow-auto rounded-lg border border-slate-800">
-              <table className="min-w-full divide-y divide-slate-800 text-sm">
-                <thead className="bg-slate-950/60 text-left text-xs uppercase tracking-wide text-slate-400">
-                  <tr>
-                    <th className="px-3 py-2">Dynamic group</th>
-                    <th className="px-3 py-2">Observed VLAN</th>
-                    <th className="px-3 py-2">Candidate MGID</th>
-                    <th className="px-3 py-2">Select</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800">
-                  {groupCandidates.map((candidate) => {
-                    const configuredVlan = numericValue(form.vocera_vlan, 684)
-                    const mismatch = candidate.vlan !== configuredVlan
-                    return (
-                      <tr key={`${candidate.group}-${candidate.vlan}-${candidate.mgid ?? 'none'}`} className="text-slate-200">
-                        <td className="px-3 py-2 font-mono text-xs">{candidate.group}</td>
-                        <td className="px-3 py-2">{candidate.vlan}{mismatch ? ' (differs from configured)' : ''}</td>
-                        <td className="px-3 py-2">{candidate.mgid ?? 'unknown'}</td>
-                        <td className="px-3 py-2">
-                          <button className="rounded-lg border border-cyan-500/60 px-3 py-1 text-xs text-cyan-100 disabled:opacity-50" disabled={busy} onClick={() => { void selectActiveGroupCandidate(candidate) }}>
-                            Use
-                          </button>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-          <label className="mt-3 block space-y-1 text-sm text-slate-300">
-            <span>Override active-group VLAN reason</span>
-            <input
-              className={textInputClass()}
-              value={overrideReason}
-              onChange={(event) => setOverrideReason(event.target.value)}
-              placeholder="Required only when selected group VLAN differs from configured VLAN"
-            />
-          </label>
-          <p className="mt-2 text-xs text-slate-500">
-            Configured VLAN: {form.vocera_vlan || 'not set'}; active group: {activeGroup || 'not set'}; active group VLAN: {activeGroupVlan || 'unresolved'}.
-            Command previews replace only visible placeholders and do not hide the original transcript evidence requirement.
-          </p>
-          <p className="mt-1 text-xs text-slate-500">
-            Group selection binds to attempt: {currentAttemptId ?? 'none yet — mark a broadcast first'}
-            {attempts.length > 0 ? ` (${attempts.length} attempt${attempts.length === 1 ? '' : 's'} this session).` : '.'}
-          </p>
         </div>
+      </Card>
 
-        {error && <div className="rounded-lg border border-rose-900 bg-rose-950/30 p-3 text-sm text-rose-100">{error}</div>}
-        {message && <div className="rounded-lg border border-emerald-900 bg-emerald-950/30 p-3 text-sm text-emerald-100">{message}</div>}
+      {error && <div className="rounded-md border border-rose-900 bg-rose-950/30 p-3 text-sm text-rose-100">{error}</div>}
+      {message && <div className="rounded-md border border-emerald-900 bg-emerald-950/30 p-3 text-sm text-emerald-100">{message}</div>}
 
-        {loggedConsoleCommand && (
-          <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
-            <div className="grid gap-3 lg:grid-cols-[18rem_1fr]">
-              <label className="space-y-1 text-sm text-slate-300">
-                <span>WLC SSH user</span>
-                <input
-                  className={textInputClass()}
-                  value={consoleUser}
-                  onChange={(event) => setConsoleUser(event.target.value)}
-                  placeholder="operator username"
-                />
-              </label>
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Logged WLC console</p>
-                <pre className="mt-2 overflow-auto rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300">{loggedConsoleCommand}</pre>
-              </div>
-            </div>
-          </div>
-        )}
+      {showCreate && (
+        <SessionCreateWizard defaults={defaults} busy={busy} onCreate={createSession} onCancel={() => setShowCreate(false)} />
+      )}
 
-        {Object.keys(displayedCommandSheets).length > 0 && (
-          <div className="space-y-2">
-            {Object.entries(displayedCommandSheets).map(([name, text]) => (
-              <details key={name} className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
-                <summary className="cursor-pointer text-sm font-semibold text-slate-200">{name}</summary>
-                <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap text-xs text-slate-300">{text}</pre>
-              </details>
-            ))}
-          </div>
-        )}
+      <SessionHistory sessions={sessions} selectedSessionId={selectedSessionId} onSelect={(sessionId) => { void selectSession(sessionId) }} />
 
-        <div className="overflow-auto rounded-lg border border-slate-800">
-          <table className="min-w-full divide-y divide-slate-800 text-sm">
-            <thead className="bg-slate-950/60 text-left text-xs uppercase tracking-wide text-slate-400">
-              <tr>
-                <th className="px-3 py-2">Session</th>
-                <th className="px-3 py-2">State</th>
-                <th className="px-3 py-2">Capture</th>
-                <th className="px-3 py-2">Interface</th>
-                <th className="px-3 py-2">Ring</th>
-                <th className="px-3 py-2">Configured VLAN</th>
-                <th className="px-3 py-2">Resolved VLAN</th>
-                <th className="px-3 py-2">Attempts</th>
-                <th className="px-3 py-2">Events</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800">
-              {sessions.map((session) => (
-                <tr key={field(session, 'session_id')} className="text-slate-200">
-                  <td className="px-3 py-2 font-mono text-xs">{field(session, 'session_id')}</td>
-                  <td className="px-3 py-2">{field(session, 'session_state')}</td>
-                  <td className="px-3 py-2">{field(session, 'capture_name')}</td>
-                  <td className="px-3 py-2">{field(session, 'wlc_interface')}</td>
-                  <td className="px-3 py-2">{field(session, 'ring_total_size_mb')} MB</td>
-                  <td className="px-3 py-2">{field(session, 'configured_vocera_vlan', '684')}</td>
-                  <td className="px-3 py-2">{field(session, 'resolved_group_vlan', 'unresolved')}</td>
-                  <td className="px-3 py-2">{field(session, 'attempt_count', '0')}</td>
-                  <td className="px-3 py-2">{field(session, 'event_count', '0')}</td>
-                </tr>
-              ))}
-              {sessions.length === 0 && (
-                <tr>
-                  <td className="px-3 py-6 text-center text-slate-500" colSpan={9}>
-                    No WLC capture sessions found for this study.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+      {selectedSession && detail ? (
+        <OperatorConsole
+          detail={detail}
+          defaults={defaults}
+          busy={busy}
+          consoleUser={consoleUser}
+          setConsoleUser={setConsoleUser}
+          onPatchState={patchSelectedState}
+          onStartAttempt={startAttempt}
+          onSetOutcome={setOutcome}
+          onSelectGroup={selectGroup}
+          onRefresh={() => { void refresh(selectedSessionId) }}
+          onMessage={setMessage}
+        />
+      ) : sessions.length > 1 ? (
+        <div className="rounded-md border border-slate-800 bg-slate-950/40 p-6 text-center text-sm text-slate-400">
+          Select one session to operate or review. No WLC action buttons are enabled until a session is selected.
         </div>
-
-        <div className="overflow-auto rounded-lg border border-slate-800">
-          <table className="min-w-full divide-y divide-slate-800 text-sm">
-            <thead className="bg-slate-950/60 text-left text-xs uppercase tracking-wide text-slate-400">
-              <tr>
-                <th className="px-3 py-2">Attempt</th>
-                <th className="px-3 py-2">State</th>
-                <th className="px-3 py-2">Outcome</th>
-                <th className="px-3 py-2">Group</th>
-                <th className="px-3 py-2">VLAN</th>
-                <th className="px-3 py-2">MGID</th>
-                <th className="px-3 py-2">Receiver member</th>
-                <th className="px-3 py-2">VLAN context</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800">
-              {attempts.map((attempt) => (
-                <tr key={field(attempt, 'attempt_id')} className="text-slate-200">
-                  <td className="px-3 py-2 font-mono text-xs">{field(attempt, 'attempt_id')}</td>
-                  <td className="px-3 py-2">{field(attempt, 'attempt_state', '—')}</td>
-                  <td className="px-3 py-2">{field(attempt, 'audio_result', '—')}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{field(attempt, 'resolved_group_ip') || field(attempt, 'dynamic_multicast_ip', '—')}</td>
-                  <td className="px-3 py-2">{field(attempt, 'resolved_group_vlan') || field(attempt, 'vocera_vlan', '—')}</td>
-                  <td className="px-3 py-2">{field(attempt, 'resolved_mgid', '—')}</td>
-                  <td className="px-3 py-2">{field(attempt, 'receiver_group_member', 'unavailable')}</td>
-                  <td className="px-3 py-2">{field(attempt, 'vlan_context_state', 'unresolved')}</td>
-                </tr>
-              ))}
-              {attempts.length === 0 && (
-                <tr>
-                  <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
-                    No broadcast attempts recorded for this session.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Session artifacts</p>
-            <button
-              className="rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-200 disabled:opacity-50"
-              disabled={busy || loading}
-              onClick={() => { void refreshArtifactStatus() }}
-            >
-              Refresh status
-            </button>
-          </div>
-          <p className="mt-1 text-xs text-slate-500">
-            After <span className="font-mono">stop-export.cli</span> succeeds, the WLC SCP-pushes the EPC into the session
-            <span className="font-mono"> incoming/</span> folder. A one-minute local timer on the collector detects the
-            completed upload, validates it, finalizes it as service-owned <span className="font-mono">pcaps/</span> evidence, registers it
-            as a <span className="font-mono">wlc_epc</span> capture, and parses it automatically — no manual move, hash,
-            register, or parse step. Logged WLC console output is parsed as <span className="font-mono">wlc_terminal_output</span> evidence.
-            This button just refreshes the displayed status.
-          </p>
-          <div className="mt-3 overflow-auto rounded-lg border border-slate-800">
-            <table className="min-w-full divide-y divide-slate-800 text-sm">
-              <thead className="bg-slate-950/60 text-left text-xs uppercase tracking-wide text-slate-400">
-                <tr>
-                  <th className="px-3 py-2">File</th>
-                  <th className="px-3 py-2">Size</th>
-                  <th className="px-3 py-2">SHA-256</th>
-                  <th className="px-3 py-2">Artifact kind</th>
-                  <th className="px-3 py-2">Ingest state</th>
-                  <th className="px-3 py-2">Parser</th>
-                  <th className="px-3 py-2">Visibility</th>
-                  <th className="px-3 py-2">Detail</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800">
-                {artifacts.map((artifact) => {
-                  const blocks = transcriptBlocks(artifact)
-                  return (
-                    <Fragment key={field(artifact, 'artifact_id')}>
-                      <tr className="text-slate-200">
-                        <td className="px-3 py-2 font-mono text-xs">{field(artifact, 'source_name', '—')}</td>
-                        <td className="px-3 py-2">{formatBytes(field(artifact, 'size_bytes'))}</td>
-                        <td className="px-3 py-2 font-mono text-xs">{shortSha(field(artifact, 'sha256'))}</td>
-                        <td className="px-3 py-2 font-mono text-xs">{field(artifact, 'artifact_kind', 'wlc_epc')}</td>
-                        <td className="px-3 py-2">{ingestStateLabel(field(artifact, 'ingest_state'))}</td>
-                        <td className="px-3 py-2">{field(artifact, 'parser_status', '—')}</td>
-                        <td className="px-3 py-2">{field(artifact, 'visibility_class', 'pending')}</td>
-                        <td className="px-3 py-2 text-xs text-rose-200">{field(artifact, 'error_message', '')}</td>
-                      </tr>
-                      {blocks.length > 0 && (
-                        <tr className="bg-slate-950/50">
-                          <td className="px-3 py-3 text-xs text-slate-300" colSpan={8}>
-                            <div className="mb-2 font-semibold uppercase tracking-wide text-slate-500">Transcript blocks</div>
-                            <div className="grid gap-2 md:grid-cols-2">
-                              {blocks.map((block) => (
-                                <div
-                                  key={blockText(block, 'block_id')}
-                                  className="rounded border border-slate-800 bg-slate-950/70 p-2"
-                                >
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <span className="font-mono text-cyan-200">{blockText(block, 'block_id')}</span>
-                                    <span>{blockText(block, 'phase')}</span>
-                                    <span className="text-slate-500">{blockText(block, 'association_confidence')}</span>
-                                  </div>
-                                  <div className="mt-1 text-slate-400">
-                                    Attempt: <span className="font-mono">{blockText(block, 'attempt_id')}</span>
-                                  </div>
-                                  <div className="mt-1 text-slate-400">
-                                    Group: <span className="font-mono">{blockText(block, 'vocera_group')}</span>
-                                    {' '}VLAN: <span className="font-mono">{blockText(block, 'resolved_group_vlan')}</span>
-                                    {' '}MGID: <span className="font-mono">{blockText(block, 'mgid')}</span>
-                                  </div>
-                                  <div className="mt-1 text-slate-400">
-                                    Receiver member: <span className="font-mono">{blockText(block, 'receiver_group_member')}</span>
-                                    {' '}Observations: <span className="font-mono">{blockText(block, 'observation_count', '0')}</span>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  )
-                })}
-                {artifacts.length === 0 && (
-                  <tr>
-                    <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
-                      No session artifacts yet. Waiting for WLC export or terminal evidence.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    </CollapsibleCard>
+      ) : null}
+    </div>
   )
 }
