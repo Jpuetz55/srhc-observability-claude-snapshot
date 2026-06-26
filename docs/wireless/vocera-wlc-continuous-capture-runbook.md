@@ -16,8 +16,14 @@ https://www.cisco.com/c/en/us/td/docs/wireless/controller/9800/17-18/config-guid
 Use Study Web:
 
 ```text
-Vocera multicast -> Vocera Multicast Capture Sessions -> Create Session
+Vocera multicast -> Create or open investigation -> New WLC capture session
 ```
+
+The WLC command sheets and event buttons are hidden until a Media QoE
+investigation study is selected. After the session is created, open that
+specific session before recording WLC state, attempts, active-group selection,
+or artifact status; Study Web does not send actions to an implicit "latest"
+session.
 
 Or use the CLI package generator:
 
@@ -145,17 +151,16 @@ packet rate.
 While the EPC session runs, mark each broadcast in Study Web:
 
 ```text
-broadcast started
-heard
-missed
-partial
-choppy
-alert only
-session end
+Start broadcast attempt
+Heard clearly
+Missed
+Partial
+Choppy
+Alert only
 ```
 
-Each marker stores collector/browser time. Result markers also create
-attempt rows tied to the capture session.
+Each marker stores collector/browser time. Outcome markers close or update the
+currently open attempt for the selected capture session only.
 
 ## VLAN context
 
