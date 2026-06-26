@@ -174,6 +174,7 @@ function profileRows(defaults: MediaWlcDefaultsResponse | null, form?: CreateFor
   const d = defaults?.defaults
   return [
     ['WLC', d?.wlc_name ?? '—'],
+    ['SSH target', d?.wlc_ssh_host ? `${d.wlc_ssh_host}:${d.wlc_ssh_port ?? 22}` : '—'],
     ['Interface', form?.advanced && form.wlc_interface ? form.wlc_interface : d?.wlc_interface ?? '—'],
     ['Collector', d?.collector_host ?? '—'],
     ['SCP account', d?.collector_scp_username ?? '—'],
@@ -195,6 +196,8 @@ function hasCompleteCaptureProfile(defaults: MediaWlcDefaultsResponse | null): b
   }
   return Boolean(
     profile.wlc_name?.trim() &&
+    profile.wlc_ssh_host?.trim() &&
+    Number(profile.wlc_ssh_port ?? 22) > 0 &&
     profile.wlc_interface?.trim() &&
     profile.collector_host?.trim() &&
     profile.collector_scp_username?.trim() &&
@@ -587,12 +590,15 @@ function OperatorConsole({
     ?? attempts[0]
     ?? null
   const configuredVlan = numericValue(field(session, 'configured_vocera_vlan'), defaults?.defaults.vocera_vlan ?? 684)
+  const wlcSshHost = defaults?.defaults.wlc_ssh_host?.trim() ?? ''
+  const wlcSshPort = defaults?.defaults.wlc_ssh_port ?? 22
   const commandSheets = detail.command_sheets ?? {}
-  const consoleCommand = field(session, 'command_package_path') && field(session, 'wlc_name')
+  const consoleCommand = field(session, 'command_package_path') && wlcSshHost
     ? [
         'make vocera-media-qoe-wlc-session-console \\',
         `  SESSION_DIR=${shellQuote(field(session, 'command_package_path'))} \\`,
-        `  WLC_SSH_HOST=${shellQuote(field(session, 'wlc_name'))} \\`,
+        `  WLC_SSH_HOST=${shellQuote(wlcSshHost)} \\`,
+        `  WLC_SSH_PORT=${shellQuote(String(wlcSshPort))} \\`,
         `  WLC_SSH_USER=${consoleUser.trim() ? shellQuote(consoleUser.trim()) : '<your-wlc-user>'}`
       ].join('\n')
     : ''
