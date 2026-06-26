@@ -437,6 +437,19 @@ export type MediaWlcSessionResponse = {
   message?: string
 }
 
+export type MediaWlcSessionDetailResponse = {
+  ok: boolean
+  session: StringRow
+  attempts: StringRow[]
+  events: StringRow[]
+  artifacts: StringRow[]
+  command_sheets: Record<string, string>
+  ingest_status?: Record<string, unknown>
+  open_attempt_id?: string | null
+  selected_attempt_id?: string | null
+  next_operator_action?: StringRow
+}
+
 export type MediaWlcSessionPatchRequest = {
   session_state?: 'prepared_not_started' | 'running' | 'stopped' | 'exported' | 'imported' | 'aborted'
   capture_started_at?: string
