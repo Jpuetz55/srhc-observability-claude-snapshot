@@ -6191,6 +6191,11 @@ def media_qoe_wlc_ingest_metrics() -> Response:
     return Response(media_wlc_ingest_metrics_text(), media_type="text/plain; version=0.0.4")
 
 
+@app.get("/metrics")
+def study_web_metrics() -> Response:
+    return Response(media_wlc_ingest_metrics_text(), media_type="text/plain; version=0.0.4")
+
+
 @app.get("/api/media-qoe/wlc/sessions/{session_id}/artifacts")
 def list_media_qoe_wlc_session_artifacts(session_id: str) -> dict[str, Any]:
     media_wlc_validate_id(session_id, "session_id")
