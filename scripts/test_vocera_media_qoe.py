@@ -923,6 +923,13 @@ def test_media_study_sql_contract() -> None:
     require("create table if not exists vocera_media_attempt_findings" in schema, "missing manual WLC attempt finding table")
     require("create or replace view v_vocera_media_qoe_projects" in views, "missing media QoE project view")
     require("create or replace view v_vocera_media_qoe_studies" in views, "missing media QoE study view")
+    study_view = views.split(
+        "create or replace view v_vocera_media_qoe_studies", 1
+    )[1].split("create or replace view ", 1)[0]
+    require(
+        "s.deleted_at,\n  s.study_type\nfrom vocera_studies s" in study_view,
+        "media QoE study view must expose study_type for API/UI selectors",
+    )
     require("create or replace view v_vocera_media_qoe_study_captures" in views, "missing media QoE study capture view")
     study_capture_view = views.split(
         "create or replace view v_vocera_media_qoe_study_captures", 1
