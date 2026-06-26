@@ -739,8 +739,19 @@ select
   latest_resolved_attempt.resolved_group_vlan as latest_resolved_group_vlan,
   latest_resolved_attempt.resolved_mgid as latest_resolved_mgid,
   latest_resolved_attempt.vlan_context_state as latest_resolved_vlan_context_state,
-  latest_resolved_attempt.active_group_selected_at as latest_resolved_at
+  latest_resolved_attempt.active_group_selected_at as latest_resolved_at,
+  coalesce(leg_stats.leg_count, 0)::integer as leg_count,
+  coalesce(leg_stats.ap_ota_leg_count, 0)::integer as ap_ota_leg_count,
+  coalesce(leg_stats.ready_ap_ota_leg_count, 0)::integer as ready_ap_ota_leg_count
 from vocera_media_capture_sessions s
+left join lateral (
+  select
+    count(*) as leg_count,
+    count(*) filter (where leg_type = 'ap_client_ota') as ap_ota_leg_count,
+    count(*) filter (where leg_type = 'ap_client_ota' and leg_state in ('ready', 'prepared', 'running', 'stopped', 'attached', 'parsed')) as ready_ap_ota_leg_count
+  from vocera_media_capture_legs leg
+  where leg.capture_session_id = s.session_id
+) leg_stats on true
 left join lateral (
   select
     count(*) as attempt_count,
@@ -776,6 +787,10 @@ left join lateral (
   ) desc
   limit 1
 ) latest_resolved_attempt on true;
+
+create or replace view v_vocera_media_capture_legs as
+select *
+from vocera_media_capture_legs;
 
 create or replace view v_vocera_media_capture_session_events as
 select *
