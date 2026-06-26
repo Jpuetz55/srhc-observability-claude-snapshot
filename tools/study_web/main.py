@@ -17,7 +17,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -60,6 +60,7 @@ if str(_VOCERA_MEDIA_QOE_DIR) not in sys.path:
 import vocera_wlc_session_ingest as wlc_ingest  # noqa: E402
 import vocera_wlc_cli as wlc_cli  # noqa: E402
 import vocera_media_qoe as media_analyzer  # noqa: E402
+import vocera_ap_ota_preflight as ap_ota_preflight  # noqa: E402
 
 STATIC_DIR = Path(os.environ.get("STUDY_WEB_STATIC_DIR", str(ROOT / "tools" / "study_web" / "static")))
 SOURCE_TYPES = ("badge_log", "ekahau_json", "manual_csv", "ipad_client_detail", "other")
@@ -140,6 +141,14 @@ MEDIA_AP_OTA_REQUIRED_CLASSIFIERS = (
     "broadcast_classifier_enabled",
     "multicast_classifier_enabled",
 )
+# Evidence-based AP-OTA preflight workflow (live, append-only). The gate
+# derivation and these vocabularies live in the framework-free
+# vocera_ap_ota_preflight module so they can be unit tested without FastAPI.
+MEDIA_AP_OTA_PREFLIGHT_CLASSIFIERS = ap_ota_preflight.REQUIRED_CLASSIFIERS
+MEDIA_AP_OTA_PREFLIGHT_MAX_AGE_SECONDS = ap_ota_preflight.MAX_AGE_SECONDS
+MEDIA_AP_OTA_CAPTURE_CAPABILITIES = ap_ota_preflight.CAPTURE_CAPABILITIES
+MEDIA_AP_OTA_EVALUATION_STATES = ap_ota_preflight.EVALUATION_STATES
+MEDIA_AP_OTA_EVIDENCE_SOURCES = ap_ota_preflight.EVIDENCE_SOURCES
 
 SourceType = Literal["badge_log", "ekahau_json", "manual_csv", "ipad_client_detail", "other"]
 RunStatus = Literal["draft", "running", "complete", "failed", "deleted"]
@@ -434,6 +443,46 @@ class MediaApOtaLegPatch(BaseModel):
     leg_state: MediaCaptureLegState | None = None
     started_at: datetime | None = None
     stopped_at: datetime | None = None
+    notes: str | None = None
+
+    class Config:
+        extra = "forbid"
+
+
+class MediaApOtaPreflightCreate(BaseModel):
+    observed_at: datetime
+    raw_cli_output: str = Field(min_length=1)
+    target_client_mac: str = Field(min_length=1)
+    target_client_associated: bool
+    target_client_ip: str | None = None
+    target_client_role: str = "receiver"
+    serving_ap_name: str | None = None
+    serving_ap_mac: str | None = None
+    serving_ap_mode: str | None = None
+    target_radio: str | None = None
+    target_band: str | None = None
+    target_channel: int | None = None
+    target_channel_width: str | None = None
+    site_tag: str | None = None
+    ap_join_profile: str | None = None
+    packet_capture_profile: str | None = None
+    site_capture_status_verified: bool = False
+    existing_site_capture_active: bool | None = None
+    active_capture_client_mac: str | None = None
+    classifiers: dict[str, bool] = Field(default_factory=dict)
+    ftp_server_host: str | None = None
+    ftp_path: str | None = None
+    ftp_username: str | None = None
+    notes: str | None = None
+
+    # extra = "forbid" is a hard security boundary here: it makes the API reject
+    # any unexpected field, including an FTP password, instead of silently
+    # accepting and persisting it.
+    class Config:
+        extra = "forbid"
+
+
+class MediaApOtaCompanionLegCreate(BaseModel):
     notes: str | None = None
 
     class Config:
@@ -3393,6 +3442,164 @@ def media_ap_ota_write_command_sheets(session: Mapping[str, Any], leg: Mapping[s
     return sheets
 
 
+def media_ap_ota_target_mac() -> str:
+    """Return the configured C1000 receiver MAC the AP-OTA workflow is locked to."""
+
+    return media_normalized_mac(str(media_ap_ota_defaults().get("target_client_mac") or ""))
+
+
+def media_ap_ota_discovery_command_sheets(
+    *,
+    target_mac: str | None = None,
+    serving_ap_name: str | None = None,
+    site_tag: str | None = None,
+    packet_capture_profile: str | None = None,
+) -> dict[str, str]:
+    """Return read-only AP-OTA discovery command sheets.
+
+    These never start a capture or change a profile. ``ap-ota-discover-client``
+    can be run before the serving AP is known; ``ap-ota-verify-profile`` is only
+    useful once discovery has resolved the serving AP, site tag, and AP join
+    profile / packet-capture profile names.
+    """
+
+    client = media_cli_mac_token(target_mac or media_ap_ota_target_mac())
+    ap_name = (serving_ap_name or "").strip() or "<SERVING_AP_NAME>"
+    tag = (site_tag or "").strip() or "<SITE_TAG>"
+    profile = (packet_capture_profile or "").strip() or "<PACKET_CAPTURE_PROFILE>"
+    return {
+        "ap-ota-discover-client.cli": "\n".join(
+            [
+                "terminal length 0",
+                "show clock detail",
+                f"show wireless client mac-address {client} detail",
+                f"show wireless client summary | include {client}",
+                "show ap status packet-capture",
+            ]
+        ),
+        "ap-ota-verify-profile.cli": "\n".join(
+            [
+                "terminal length 0",
+                "show clock detail",
+                f"show ap tag summary | include {ap_name}",
+                f"show wireless tag site detailed {tag}",
+                f"show wireless profile ap packet-capture detailed {profile}",
+                "show ap status packet-capture",
+            ]
+        ),
+    }
+
+
+def media_ap_ota_session_validation_dir(session: Mapping[str, Any]) -> Path:
+    """Return the root-owned session validation/ directory for evidence storage."""
+
+    package_path = str(session.get("command_package_path") or "")
+    if package_path:
+        base = Path(package_path)
+    else:
+        base = media_wlc_session_package_dir(
+            str(session.get("study_id") or ""), str(session.get("session_id") or ""), create=False
+        )
+    validation = base / "validation"
+    validation.mkdir(parents=True, exist_ok=True)
+    return validation
+
+
+def media_ap_ota_evaluate_preflight(
+    facts: Mapping[str, Any], *, observed_at: datetime, now: datetime
+) -> dict[str, Any]:
+    """Derive the AP-OTA preflight gate state from observed evidence.
+
+    The gate state is always derived here, never accepted from the client, so a
+    stale or unsuitable observation cannot be hand-waved into ``ready_to_prepare``
+    by setting a boolean. Each unmet condition is recorded as a human-readable
+    blocker so the UI gate table can explain exactly what is missing.
+    """
+
+    ftp_status = media_ap_ota_ftp_status()
+    result = ap_ota_preflight.evaluate(
+        facts,
+        observed_at=observed_at,
+        now=now,
+        ftp_intake_ready=bool(ftp_status.get("ftp_intake_ready")),
+        max_age_seconds=MEDIA_AP_OTA_PREFLIGHT_MAX_AGE_SECONDS,
+    )
+    result["ftp_drop_dir"] = ftp_status.get("ftp_drop_dir")
+    return result
+
+
+def media_ap_ota_write_preflight_transcript(
+    session: Mapping[str, Any], preflight_id: str, raw_output: str, structured: Mapping[str, Any]
+) -> tuple[str, str, str]:
+    """Persist immutable preflight evidence under the session validation/ dir.
+
+    The raw CLI transcript is written verbatim and hashed; the JSON sidecar
+    carries the normalized facts, the transcript hash, the derived blockers, and
+    the final gate state. Both are root-owned and mode 0600 so the browser/API
+    can never edit a completed preflight. Returns (sha256, txt_relpath, json_relpath).
+    """
+
+    validation = media_ap_ota_session_validation_dir(session)
+    txt_path = validation / f"ap-ota-preflight-{preflight_id}.txt"
+    json_path = validation / f"ap-ota-preflight-{preflight_id}.json"
+    raw_bytes = raw_output.encode("utf-8")
+    sha256 = hashlib.sha256(raw_bytes).hexdigest()
+    txt_path.write_bytes(raw_bytes)
+    txt_path.chmod(0o600)
+    sidecar = dict(structured)
+    sidecar["transcript_sha256"] = sha256
+    json_path.write_text(json.dumps(sidecar, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    json_path.chmod(0o600)
+    txt_rel = str(txt_path.relative_to(validation.parent))
+    json_rel = str(json_path.relative_to(validation.parent))
+    return sha256, txt_rel, json_rel
+
+
+def media_ap_ota_session_preflight_runs(session_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+    """Return API-safe preflight runs for a session, newest first, with live freshness."""
+
+    rows = media_query_rows(
+        "select * from vocera_media_ap_ota_preflight_runs "
+        f"where capture_session_id = {sql_text(session_id)} "
+        "order by observed_at desc, created_at desc "
+        f"limit {int(limit)};"
+    )
+    now = datetime.now(timezone.utc)
+    return [media_ap_ota_preflight_public(row, now=now) for row in rows]
+
+
+def media_ap_ota_preflight_run_row(preflight_id: str) -> dict[str, str]:
+    row = media_query_one(
+        "select * from vocera_media_ap_ota_preflight_runs "
+        f"where preflight_id = {sql_text(preflight_id)};"
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail=f"No AP-OTA preflight run found for {preflight_id}.")
+    return row
+
+
+def media_ap_ota_preflight_public(row: Mapping[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    """Return an API-safe preflight run with live freshness, never an FTP password.
+
+    The stored ``evaluation_state`` is the state at import time. Freshness is a
+    live property, so ``fresh``/``age_seconds`` and an ``effective_state`` are
+    recomputed against the current clock: a run that was ready_to_prepare can be
+    surfaced as expired once it ages past the static-mode freshness window.
+    """
+
+    now = now or datetime.now(timezone.utc)
+    out = {key: value for key, value in dict(row).items() if key not in ("ftp_password",)}
+    expires_at = _media_parse_iso(row.get("expires_at"))
+    fresh = bool(expires_at and now <= expires_at)
+    observed_at = _media_parse_iso(row.get("observed_at"))
+    out["fresh"] = fresh
+    out["age_seconds"] = max(0.0, (now - observed_at).total_seconds()) if observed_at else None
+    stored_state = str(row.get("evaluation_state") or "blocked")
+    out["effective_state"] = stored_state if fresh else "blocked"
+    out["can_create_companion_leg"] = out["effective_state"] == "ready_to_prepare"
+    return out
+
+
 def media_wlc_session_root(*, create: bool = False) -> Path:
     """Return the raw-root-scoped WLC session package root."""
 
@@ -3752,6 +3959,8 @@ def media_wlc_session_detail(session_id: str) -> dict[str, Any]:
         "artifacts": artifacts,
         "capture_legs": capture_legs,
         "ap_ota_preflight": media_ap_ota_preflight_payload(session=session),
+        "ap_ota_defaults": media_ap_ota_defaults(),
+        "ap_ota_preflight_runs": media_ap_ota_session_preflight_runs(session_id),
         "command_sheets": media_wlc_command_sheets(command_dir),
         "ingest_status": media_wlc_ingest_health(),
         "open_attempt_id": open_attempt_id,
@@ -5254,6 +5463,242 @@ def update_media_qoe_ap_ota_leg(leg_id: str, payload: MediaApOtaLegPatch) -> dic
         + f" where leg_id = {sql_text(leg_id)} returning leg_id;"
     )
     return {"ok": True, "leg": media_ap_ota_leg_row(leg_id)}
+
+
+def _safe_int(value: Any) -> int | None:
+    """Coerce a possibly-string DB value into an int, or None when blank/invalid."""
+
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def media_ap_ota_json_value(value: Any) -> str:
+    """Serialize a JSON value (list or dict) into a jsonb literal.
+
+    Unlike ``media_jsonb`` this preserves an empty list as a JSON array instead
+    of coercing falsy values to ``{}``, so the blockers array keeps its type.
+    """
+
+    return sql_text(json.dumps(value, sort_keys=True)) + "::jsonb"
+
+
+@app.get("/api/media-qoe/wlc/sessions/{session_id}/ap-ota/discovery-commands")
+def get_media_qoe_ap_ota_discovery_commands(
+    session_id: str,
+    serving_ap_name: str | None = None,
+    site_tag: str | None = None,
+    packet_capture_profile: str | None = None,
+) -> dict[str, Any]:
+    media_wlc_validate_id(session_id, "session_id")
+    session = media_wlc_session_row(session_id)
+    sheets = media_ap_ota_discovery_command_sheets(
+        serving_ap_name=serving_ap_name,
+        site_tag=site_tag,
+        packet_capture_profile=packet_capture_profile,
+    )
+    # Persist the read-only sheets into the session package so the operator can
+    # run them through the recorded WLC console alongside the EPC sheets.
+    package_path = str(session.get("command_package_path") or "")
+    if package_path:
+        cli_dir = Path(package_path) / "cli"
+        cli_dir.mkdir(parents=True, exist_ok=True)
+        for name, text in sheets.items():
+            path = cli_dir / name
+            path.write_text(text.rstrip() + "\n", encoding="utf-8")
+            path.chmod(0o644)
+    return {"ok": True, "command_sheets": sheets, "target_client_mac": media_ap_ota_target_mac()}
+
+
+@app.get("/api/media-qoe/wlc/sessions/{session_id}/ap-ota/preflights")
+def list_media_qoe_ap_ota_preflights(session_id: str, limit: int = 100) -> dict[str, Any]:
+    media_wlc_validate_id(session_id, "session_id")
+    media_wlc_session_row(session_id)
+    rows = media_query_rows(
+        "select * from vocera_media_ap_ota_preflight_runs "
+        f"where capture_session_id = {sql_text(session_id)} "
+        "order by observed_at desc, created_at desc "
+        f"limit {media_limit(limit, default=100, maximum=500)};"
+    )
+    now = datetime.now(timezone.utc)
+    return {"ok": True, "preflights": [media_ap_ota_preflight_public(row, now=now) for row in rows]}
+
+
+@app.get("/api/media-qoe/ap-ota/preflights/{preflight_id}")
+def get_media_qoe_ap_ota_preflight_run(preflight_id: str) -> dict[str, Any]:
+    media_wlc_validate_id(preflight_id, "preflight_id")
+    row = media_ap_ota_preflight_run_row(preflight_id)
+    return {"ok": True, "preflight": media_ap_ota_preflight_public(row)}
+
+
+@app.post("/api/media-qoe/wlc/sessions/{session_id}/ap-ota/preflights", status_code=201)
+def create_media_qoe_ap_ota_preflight_run(session_id: str, payload: MediaApOtaPreflightCreate) -> dict[str, Any]:
+    media_wlc_validate_id(session_id, "session_id")
+    session = media_wlc_session_row(session_id)
+    configured = media_ap_ota_target_mac()
+    requested = media_normalized_mac(payload.target_client_mac)
+    if not requested:
+        raise HTTPException(status_code=422, detail="target_client_mac must be a valid MAC address.")
+    if not configured:
+        raise HTTPException(status_code=400, detail="AP-OTA target C1000 receiver MAC is not configured.")
+    if requested != configured:
+        raise HTTPException(
+            status_code=422,
+            detail="AP-OTA preflight target must be the configured C1000 receiver.",
+        )
+    now = datetime.now(timezone.utc)
+    observed_at = payload.observed_at
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=timezone.utc)
+    # Reject an observation timestamped well into the future: live evidence
+    # cannot have been recorded after now, allowing only minor clock skew.
+    if observed_at > now + timedelta(seconds=300):
+        raise HTTPException(status_code=422, detail="observed_at is too far in the future to be live evidence.")
+
+    facts = {
+        "target_client_mac": requested,
+        "target_client_associated": payload.target_client_associated,
+        "serving_ap_name": payload.serving_ap_name,
+        "serving_ap_mode": payload.serving_ap_mode,
+        "site_tag": payload.site_tag,
+        "ap_join_profile": payload.ap_join_profile,
+        "packet_capture_profile": payload.packet_capture_profile,
+        "site_capture_status_verified": payload.site_capture_status_verified,
+        "existing_site_capture_active": payload.existing_site_capture_active,
+        "classifiers": {k: bool(v) for k, v in (payload.classifiers or {}).items()},
+        "ftp_server_host": payload.ftp_server_host,
+        "ftp_path": payload.ftp_path,
+        "ftp_username": payload.ftp_username,
+    }
+    evaluation = media_ap_ota_evaluate_preflight(facts, observed_at=observed_at, now=now)
+    preflight_id = new_entity_id("apota_pf")
+
+    structured = {
+        "preflight_id": preflight_id,
+        "capture_session_id": session_id,
+        "evidence_source": "manual_cli_import",
+        "observed_at": observed_at.isoformat(),
+        "expires_at": evaluation["expires_at"].isoformat(),
+        "target_client_mac": requested,
+        "target_client_associated": payload.target_client_associated,
+        "serving_ap_name": payload.serving_ap_name,
+        "serving_ap_mac": media_normalized_mac(payload.serving_ap_mac or "") or None,
+        "serving_ap_mode": payload.serving_ap_mode,
+        "target_radio": payload.target_radio,
+        "target_band": payload.target_band,
+        "target_channel": payload.target_channel,
+        "target_channel_width": payload.target_channel_width,
+        "site_tag": payload.site_tag,
+        "ap_join_profile": payload.ap_join_profile,
+        "packet_capture_profile": payload.packet_capture_profile,
+        "site_capture_status_verified": payload.site_capture_status_verified,
+        "existing_site_capture_active": payload.existing_site_capture_active,
+        "active_capture_client_mac": media_normalized_mac(payload.active_capture_client_mac or "") or None,
+        "capture_capability": evaluation["capture_capability"],
+        "classifiers": evaluation["classifiers"],
+        "ftp_server_host": payload.ftp_server_host,
+        "ftp_path": payload.ftp_path,
+        "ftp_username": payload.ftp_username,
+        "evaluation_state": evaluation["evaluation_state"],
+        "blockers": evaluation["blockers"],
+        "operator": user(),
+        "notes": payload.notes,
+        "claim_boundary": (
+            "Static AP client packet capture proves AP-observed OTA frame presence and timing. "
+            "On secured WLANs the data portion is encrypted, so clear UDP/RTP payload may remain opaque."
+        ),
+    }
+    sha256, txt_rel, _json_rel = media_ap_ota_write_preflight_transcript(
+        session, preflight_id, payload.raw_cli_output, structured
+    )
+
+    media_query_one(
+        "insert into vocera_media_ap_ota_preflight_runs ("
+        "preflight_id, capture_session_id, target_client_mac, target_client_ip, target_client_role, "
+        "observed_at, expires_at, evidence_source, target_client_associated, serving_ap_name, serving_ap_mac, "
+        "serving_ap_mode, target_radio, target_band, target_channel, target_channel_width, site_tag, "
+        "ap_join_profile, packet_capture_profile, site_capture_status_verified, existing_site_capture_active, "
+        "active_capture_client_mac, capture_capability, classifiers, ftp_server_host, ftp_path, ftp_username, "
+        "transcript_sha256, transcript_relpath, evaluation_state, blockers, notes, created_by"
+        ") values ("
+        f"{sql_text(preflight_id)}, {sql_text(session_id)}, {sql_text(requested)}, {sql_text(payload.target_client_ip)}, "
+        f"{sql_text(payload.target_client_role)}, {sql_timestamp(observed_at)}, {sql_timestamp(evaluation['expires_at'])}, "
+        f"'manual_cli_import', {sql_bool(payload.target_client_associated)}, {sql_text(payload.serving_ap_name)}, "
+        f"{sql_text(structured['serving_ap_mac'])}, {sql_text(payload.serving_ap_mode)}, {sql_text(payload.target_radio)}, "
+        f"{sql_text(payload.target_band)}, {sql_int(payload.target_channel)}, {sql_text(payload.target_channel_width)}, "
+        f"{sql_text(payload.site_tag)}, {sql_text(payload.ap_join_profile)}, {sql_text(payload.packet_capture_profile)}, "
+        f"{sql_bool(payload.site_capture_status_verified)}, {sql_bool(payload.existing_site_capture_active)}, "
+        f"{sql_text(structured['active_capture_client_mac'])}, {sql_text(evaluation['capture_capability'])}, "
+        f"{media_ap_ota_json_value(evaluation['classifiers'])}, {sql_text(payload.ftp_server_host)}, "
+        f"{sql_text(payload.ftp_path)}, {sql_text(payload.ftp_username)}, {sql_text(sha256)}, {sql_text(txt_rel)}, "
+        f"{sql_text(evaluation['evaluation_state'])}, {media_ap_ota_json_value(evaluation['blockers'])}, "
+        f"{sql_text(payload.notes)}, {sql_text(user())}"
+        ") returning preflight_id;"
+    )
+    row = media_ap_ota_preflight_run_row(preflight_id)
+    return {"ok": True, "preflight": media_ap_ota_preflight_public(row, now=now)}
+
+
+@app.post("/api/media-qoe/ap-ota/preflights/{preflight_id}/companion-leg", status_code=201)
+def create_media_qoe_ap_ota_companion_leg(preflight_id: str, payload: MediaApOtaCompanionLegCreate) -> dict[str, Any]:
+    media_wlc_validate_id(preflight_id, "preflight_id")
+    row = media_ap_ota_preflight_run_row(preflight_id)
+    public = media_ap_ota_preflight_public(row)
+    if public["effective_state"] != "ready_to_prepare":
+        # Either the stored state was never ready, or the static-mode freshness
+        # window has lapsed and the serving AP may have changed.
+        reason = (
+            "Preflight evidence has expired; re-run discovery before preparing a leg."
+            if not public.get("fresh")
+            else "Preflight is not in the ready_to_prepare gate state."
+        )
+        raise HTTPException(status_code=409, detail={"message": reason, "preflight": public})
+
+    session_id = str(row.get("capture_session_id") or "")
+    session = media_wlc_session_row(session_id)
+    configured = media_ap_ota_target_mac()
+    target = media_normalized_mac(str(row.get("target_client_mac") or ""))
+    if configured and target != configured:
+        raise HTTPException(status_code=409, detail="Preflight target is not the configured C1000 receiver.")
+
+    defaults = media_ap_ota_defaults()
+    leg_id = new_entity_id("apota_leg")
+    raw_context = {
+        "preflight_id": preflight_id,
+        "operator": user(),
+        "notes": payload.notes,
+        "claim_boundary": (
+            "AP client packet capture is feasibility evidence for AP-observed OTA frames. "
+            "Client-MAC filtering may not retain every group-addressed multicast frame, "
+            "and encrypted WLAN payloads may remain opaque."
+        ),
+    }
+    media_query_one(
+        "insert into vocera_media_capture_legs ("
+        "leg_id, capture_session_id, leg_type, leg_state, preflight_id, target_client_mac, target_client_ip, "
+        "target_client_role, target_ap_name, target_ap_mac, target_radio, target_band, target_channel, "
+        "target_channel_width, capture_mode, transfer_protocol, transfer_host, transfer_path, profile_name, "
+        "created_by, raw_context, updated_at"
+        ") values ("
+        f"{sql_text(leg_id)}, {sql_text(session_id)}, 'ap_client_ota', 'prepared', {sql_text(preflight_id)}, "
+        f"{sql_text(target)}, {sql_text(row.get('target_client_ip'))}, {sql_text(row.get('target_client_role'))}, "
+        f"{sql_text(row.get('serving_ap_name'))}, {sql_text(row.get('serving_ap_mac'))}, {sql_text(row.get('target_radio'))}, "
+        f"{sql_text(row.get('target_band'))}, {sql_int(_safe_int(row.get('target_channel')))}, "
+        f"{sql_text(row.get('target_channel_width'))}, 'static', "
+        f"{sql_text(defaults.get('transfer_protocol'))}, {sql_text(row.get('ftp_server_host') or defaults.get('transfer_host'))}, "
+        f"{sql_text(row.get('ftp_path') or defaults.get('transfer_path'))}, {sql_text(row.get('packet_capture_profile'))}, "
+        f"{sql_text(user())}, {media_jsonb(raw_context)}, now()"
+        ") returning leg_id;"
+    )
+    leg = media_ap_ota_leg_row(leg_id)
+    sheets = media_ap_ota_write_command_sheets(session, leg)
+    return {"ok": True, "leg": leg, "preflight": public, "command_sheets": sheets}
 
 
 @app.post("/api/media-qoe/wlc/sessions/{session_id}/events")

@@ -544,6 +544,50 @@ def test_ingest_installer_contract() -> None:
     require("install_vocera_wlc_session_ingest.sh" in makefile, "Makefile target must run the installer script")
 
 
+def test_ap_ota_preflight_runs_contract() -> None:
+    """Contract for the evidence-backed AP-OTA preflight-runs slice."""
+
+    schema = (ROOT / "sql" / "vocera_media_qoe_schema.sql").read_text(encoding="utf-8")
+    migration = (ROOT / "sql" / "migrations" / "20260626_005_ap_ota_preflight_runs.sql").read_text(encoding="utf-8")
+    main_text = (ROOT / "tools" / "study_web" / "main.py").read_text(encoding="utf-8")
+    module_text = (ROOT / "tools" / "vocera_media_qoe" / "vocera_ap_ota_preflight.py").read_text(encoding="utf-8")
+
+    # Append-only preflight evidence table is in both the bootstrap schema and a migration.
+    for text, where in ((schema, "schema"), (migration, "migration")):
+        require(
+            "create table if not exists vocera_media_ap_ota_preflight_runs" in text,
+            f"{where} must create the AP-OTA preflight runs table",
+        )
+        require("evaluation_state text not null" in text, f"{where} must persist the derived gate state")
+        require("transcript_sha256 text" in text, f"{where} preflight run must record the transcript hash")
+    require(
+        "preflight_id text\n  references vocera_media_ap_ota_preflight_runs(preflight_id)\n  on delete restrict" in migration,
+        "a capture leg must reference its authorizing preflight with on delete restrict",
+    )
+
+    # Read-only discovery sheets, never a start/profile-change command.
+    require("ap-ota-discover-client.cli" in main_text, "must generate the read-only client discovery sheet")
+    require("ap-ota-verify-profile.cli" in main_text, "must generate the read-only profile verification sheet")
+    require("show wireless profile ap packet-capture detailed" in main_text, "verify-profile must read the packet-capture profile detail")
+    require("ap packet-capture start" not in module_text, "the pure preflight module must not emit a capture start command")
+
+    # The three preflight endpoints plus the gated companion-leg creator.
+    require('@app.post("/api/media-qoe/wlc/sessions/{session_id}/ap-ota/preflights"' in main_text, "must expose preflight import")
+    require('@app.get("/api/media-qoe/wlc/sessions/{session_id}/ap-ota/preflights")' in main_text, "must expose preflight list")
+    require('@app.get("/api/media-qoe/ap-ota/preflights/{preflight_id}")' in main_text, "must expose preflight detail")
+    require('@app.post("/api/media-qoe/ap-ota/preflights/{preflight_id}/companion-leg", status_code=201)' in main_text, "companion-leg creation must return 201")
+
+    # Security boundaries: no FTP password ever crosses the API, evidence is
+    # immutable and hashed, and the gate state is derived not selected.
+    require('extra = "forbid"' in main_text, "preflight import model must reject unexpected fields (e.g. an FTP password)")
+    require("ftp_password" not in module_text, "the preflight module must not handle FTP passwords")
+    require('if key not in ("ftp_password",)' in main_text, "the public serializer must strip any FTP password field")
+    require("hashlib.sha256(raw_bytes).hexdigest()" in main_text, "raw transcript must be SHA-256 hashed")
+    require("txt_path.chmod(0o600)" in main_text, "raw transcript must be stored root-owned and mode 0600")
+    require("effective_state" in main_text, "freshness must be re-derived live so a stale ready run becomes blocked")
+    require("on secured WLANs the data portion is encrypted" in module_text.lower() or "encrypted" in main_text, "must record the encrypted-payload claim boundary")
+
+
 def main() -> int:
     test_pcap_magic_detection()
     test_sha256_file_matches_known_content()
@@ -565,6 +609,7 @@ def main() -> int:
     test_systemd_and_trigger_contract()
     test_isolation_and_hardening_contract()
     test_ingest_installer_contract()
+    test_ap_ota_preflight_runs_contract()
     print("OK: WLC capture-session ingest tests passed")
     return 0
 

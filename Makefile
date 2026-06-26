@@ -265,6 +265,7 @@ test:
 	python3 ./scripts/test_vocera_multicast.py
 	python3 ./scripts/test_vocera_wlc_cli.py
 	python3 ./scripts/test_vocera_wlc_attempt.py
+	python3 ./scripts/test_vocera_ap_ota_preflight.py
 	python3 ./scripts/test_vocera_wlc_session.py
 	python3 ./scripts/test_vocera_wlc_session_ingest.py
 	python3 ./scripts/test_vocera_wlc_session_console.py
